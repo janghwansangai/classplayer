@@ -15,13 +15,25 @@ def fmt_time(seconds: float) -> str:
 
 
 class ClickSlider(QSlider):
-    """클릭한 지점으로 바로 이동하는 슬라이더."""
+    """클릭한 지점으로 바로 이동하고, 마우스를 올리면 위치를 알려주는 슬라이더."""
 
     clicked_value = Signal(int)
+    hovered = Signal(float, int)   # 비율(0..1), 슬라이더 안 x 좌표
+    left = Signal()
 
     def __init__(self, orientation=Qt.Orientation.Horizontal, parent=None) -> None:
         super().__init__(orientation, parent)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setMouseTracking(True)
+
+    def mouseMoveEvent(self, e) -> None:
+        frac = min(1.0, max(0.0, e.position().x() / max(1, self.width())))
+        self.hovered.emit(frac, int(e.position().x()))
+        super().mouseMoveEvent(e)
+
+    def leaveEvent(self, e) -> None:
+        self.left.emit()
+        super().leaveEvent(e)
 
     def mousePressEvent(self, e) -> None:
         if e.button() == Qt.MouseButton.LeftButton:
@@ -46,6 +58,8 @@ class ControlBar(QWidget):
     vr_reset_clicked = Signal()
     fullscreen_clicked = Signal()
     screenshot_clicked = Signal()
+    preview_hover = Signal(float, int)   # 초, 슬라이더 안 x
+    preview_leave = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -77,6 +91,8 @@ class ControlBar(QWidget):
         self.slider.sliderMoved.connect(self._on_slider_moved)
         self.slider.sliderReleased.connect(self._on_slider_released)
         self.slider.clicked_value.connect(self._on_slider_clicked)
+        self.slider.hovered.connect(lambda frac, x: self.preview_hover.emit(frac * self._duration, x))
+        self.slider.left.connect(self.preview_leave)
 
         self.lbl_time = QLabel("00:00 / 00:00")
         self.lbl_time.setMinimumWidth(110)

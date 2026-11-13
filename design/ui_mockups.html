@@ -1,0 +1,77 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>ClassPlayer 화면 시안</title>
+<style>
+body{font-family:-apple-system,"Apple SD Gothic Neo",sans-serif;background:#f3f4f6;margin:0;padding:28px;color:#111}
+h1{font-size:22px;margin:0 0 6px}p.lead{margin:0 0 24px;color:#555}
+h2{font-size:17px;margin:28px 0 10px}
+.mock{width:1000px;height:600px;border-radius:14px;overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,.18);position:relative;font-size:13px}
+.note{width:1000px;color:#444;margin:10px 0 0;line-height:1.6}
+/* ---------- 시안 A: 밝고 단순 ---------- */
+.a{background:#fff;display:grid;grid-template-rows:56px 1fr 64px}
+.a .top{display:flex;align-items:center;gap:10px;padding:0 16px;border-bottom:1px solid #e5e7eb}
+.a .logo{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#2563eb,#06b6d4);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800}
+.a .search{flex:1;height:36px;border:1.5px solid #d1d5db;border-radius:18px;display:flex;align-items:center;padding:0 14px;color:#9ca3af;gap:8px}
+.a .btn{height:36px;padding:0 16px;border-radius:18px;background:#2563eb;color:#fff;display:flex;align-items:center;font-weight:600}
+.a .btn.ghost{background:#f3f4f6;color:#111}
+.a .body{display:grid;grid-template-columns:260px 1fr}
+.a .side{border-right:1px solid #e5e7eb;padding:14px;background:#fafafa}
+.a .side input{width:100%;height:32px;border:1px solid #e5e7eb;border-radius:8px;padding:0 10px;box-sizing:border-box;background:#fff}
+.a .item{display:flex;gap:10px;padding:8px;border-radius:8px;margin-top:6px;align-items:center}
+.a .item.on{background:#dbeafe}
+.a .th{width:64px;height:40px;border-radius:6px;background:linear-gradient(135deg,#94a3b8,#cbd5e1)}
+.a .video{background:#000;position:relative}
+.a .video .img{position:absolute;inset:0;background:radial-gradient(ellipse at 40% 40%,#4b7bb8,#0b1b33 70%)}
+.a .bottom{display:flex;align-items:center;gap:14px;padding:0 18px;border-top:1px solid #e5e7eb}
+.a .play{width:40px;height:40px;border-radius:20px;background:#2563eb;color:#fff;display:flex;align-items:center;justify-content:center;font-size:16px}
+.a .bar{flex:1;height:6px;border-radius:3px;background:#e5e7eb;position:relative}
+.a .bar i{position:absolute;left:0;top:0;height:6px;width:38%;background:#2563eb;border-radius:3px}
+.a .bar b{position:absolute;left:38%;top:-5px;width:16px;height:16px;border-radius:8px;background:#2563eb;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.3);margin-left:-8px}
+.a .tip{position:absolute;left:34%;bottom:84px;width:180px;background:#111;border-radius:10px;padding:6px;color:#fff;text-align:center}
+.a .tip .t{height:96px;border-radius:6px;background:radial-gradient(ellipse at 40% 40%,#4b7bb8,#0b1b33 70%);margin-bottom:4px}
+.a .ic{width:34px;height:34px;border-radius:8px;background:#f3f4f6;display:flex;align-items:center;justify-content:center;color:#374151;font-size:12px}
+/* ---------- 시안 B: 어둡고 몰입형 ---------- */
+.b{background:#0f1115}
+.b .img{position:absolute;inset:0;background:radial-gradient(ellipse at 45% 45%,#3f6ea8,#06101f 72%)}
+.b .pill{position:absolute;top:18px;left:50%;transform:translateX(-50%);width:640px;height:46px;border-radius:23px;background:rgba(20,22,28,.78);backdrop-filter:blur(14px);border:1px solid rgba(255,255,255,.14);display:flex;align-items:center;padding:0 8px 0 18px;gap:10px;color:#aab}
+.b .pill .go{margin-left:auto;height:32px;padding:0 14px;border-radius:16px;background:#3b82f6;color:#fff;display:flex;align-items:center;font-weight:600}
+.b .pill .go.ghost{background:rgba(255,255,255,.12)}
+.b .drawer{position:absolute;left:18px;top:84px;bottom:110px;width:250px;border-radius:16px;background:rgba(20,22,28,.78);backdrop-filter:blur(14px);border:1px solid rgba(255,255,255,.12);padding:14px;color:#dde}
+.b .drawer input{width:100%;height:32px;border-radius:8px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:#fff;padding:0 10px;box-sizing:border-box}
+.b .item{display:flex;gap:10px;padding:8px;border-radius:10px;margin-top:6px;align-items:center}
+.b .item.on{background:rgba(59,130,246,.3)}
+.b .th{width:64px;height:40px;border-radius:6px;background:linear-gradient(135deg,#475569,#1e293b)}
+.b .ctrl{position:absolute;left:50%;transform:translateX(-50%);bottom:22px;width:900px;height:70px;border-radius:20px;background:rgba(20,22,28,.78);backdrop-filter:blur(14px);border:1px solid rgba(255,255,255,.12);display:flex;align-items:center;gap:16px;padding:0 20px;box-sizing:border-box;color:#dde}
+.b .play{width:42px;height:42px;border-radius:21px;background:#fff;color:#000;display:flex;align-items:center;justify-content:center;font-size:16px}
+.b .bar{flex:1;height:5px;border-radius:3px;background:rgba(255,255,255,.2);position:relative}
+.b .bar i{position:absolute;left:0;top:0;height:5px;width:38%;background:#3b82f6;border-radius:3px}
+.b .bar b{position:absolute;left:38%;top:-5px;width:15px;height:15px;border-radius:8px;background:#fff;margin-left:-7px}
+.b .tip{position:absolute;left:36%;bottom:104px;width:190px;background:rgba(0,0,0,.85);border-radius:12px;padding:6px;color:#fff;text-align:center;border:1px solid rgba(255,255,255,.15)}
+.b .tip .t{height:100px;border-radius:8px;background:radial-gradient(ellipse at 45% 45%,#3f6ea8,#06101f 72%);margin-bottom:4px}
+.b .ic{width:34px;height:34px;border-radius:10px;background:rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center;font-size:12px}
+.b .badge{position:absolute;right:18px;top:84px;background:rgba(20,22,28,.78);border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:8px 12px;color:#9fb;font-size:12px}
+.hint{position:absolute;right:18px;bottom:110px;background:rgba(255,255,255,.9);border-radius:10px;padding:6px 10px;font-size:12px;color:#333}
+</style></head><body>
+<h1>ClassPlayer 화면 시안</h1>
+<p class="lead">둘 다 "링크 붙여넣기 → 재생" 한 줄이 가장 크게 보이고, 재생 중에는 영상 외 요소가 최소가 되도록 잡았습니다. 썸네일 미리보기 말풍선은 공통입니다.</p>
+
+<h2>시안 A · 밝은 교실형 (흰 바탕, 둥근 파란 버튼, 왼쪽 목록 고정)</h2>
+<div class="mock a">
+  <div class="top"><div class="logo">▶</div><div class="search">🔗 유튜브 링크를 붙여넣거나 파일을 끌어다 놓으세요</div><div class="btn">붙여넣고 재생</div><div class="btn ghost">다운로드</div><div class="btn ghost">파일</div></div>
+  <div class="body">
+    <div class="side"><input placeholder="🔍 내 영상 검색"><div class="item on"><div class="th"></div><div><b>3학년 과학 물의 순환</b><br><span style="color:#6b7280">12:40 · 어제</span></div></div><div class="item"><div class="th"></div><div>우주 360도 체험<br><span style="color:#6b7280">8:12 · 360°</span></div></div><div class="item"><div class="th"></div><div>동요 모음<br><span style="color:#6b7280">24:05</span></div></div></div>
+    <div class="video"><div class="img"></div><div class="tip"><div class="t"></div>04:48</div></div>
+  </div>
+  <div class="bottom"><div class="play">▶</div><span>04:48</span><div class="bar"><i></i><b></b></div><span>12:40</span><div class="ic">🔊</div><div class="ic">자막</div><div class="ic">360°</div><div class="ic">⛶</div></div>
+</div>
+<p class="note">· 항상 보이는 구성이라 처음 쓰는 선생님도 헤매지 않습니다. 전체화면에서는 하단 바만 반투명으로 떠올랐다 사라집니다.<br>· 라이브러리 항목에 썸네일과 길이를 표시해 목록만 보고 고를 수 있습니다.</p>
+
+<h2>시안 B · 몰입형 (어두운 바탕, 영상이 화면 전체, 떠 있는 유리 패널)</h2>
+<div class="mock b">
+  <div class="img"></div>
+  <div class="pill">🔗 링크를 붙여넣으세요<div class="go">붙여넣고 재생</div><div class="go ghost">다운로드</div></div>
+  <div class="drawer"><input placeholder="🔍 내 영상 검색"><div class="item on"><div class="th"></div><div><b>3학년 과학 물의 순환</b><br><span style="color:#99a">12:40</span></div></div><div class="item"><div class="th"></div><div>우주 360도 체험<br><span style="color:#99a">8:12 · 360°</span></div></div><div class="item"><div class="th"></div><div>동요 모음<br><span style="color:#99a">24:05</span></div></div></div>
+  <div class="badge">● 하드웨어 재생 · 광고 없음</div>
+  <div class="tip"><div class="t"></div>04:48</div>
+  <div class="ctrl"><div class="play">▶</div><span>04:48</span><div class="bar"><i></i><b></b></div><span>12:40</span><div class="ic">🔊</div><div class="ic">자막</div><div class="ic">360°</div><div class="ic">⛶</div></div>
+</div>
+<p class="note">· 모든 패널이 영상 위에 떠 있고 3초 동안 마우스를 안 움직이면 전부 사라집니다. 창 모드와 전체화면의 모습이 같아서 익숙해지기 쉽습니다.<br>· 어두운 교실(프로젝터)에서 눈이 덜 부십니다. 목록 서랍은 ⌘1로 접었다 폈다 합니다.</p>
+</body></html>

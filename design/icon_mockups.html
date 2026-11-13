@@ -1,0 +1,38 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>ClassPlayer 아이콘 시안</title>
+<style>body{font-family:-apple-system,"Apple SD Gothic Neo",sans-serif;background:#f3f4f6;padding:28px;margin:0}
+h1{font-size:22px;margin:0 0 20px}.row{display:flex;gap:60px}.card{background:#fff;border-radius:16px;padding:24px;box-shadow:0 6px 24px rgba(0,0,0,.08);width:360px}
+h2{font-size:16px;margin:0 0 14px}.sizes{display:flex;align-items:flex-end;gap:18px;margin-top:14px}.sizes div{text-align:center;font-size:11px;color:#666}
+p{color:#444;font-size:13px;line-height:1.6}</style></head><body>
+<h1>ClassPlayer 아이콘 시안 (카메라 + 플레이어)</h1>
+<div class="row">
+<div class="card"><h2>시안 1 · 둥근 카메라 렌즈 안의 플레이</h2>
+<svg id="i1" width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+ <defs><linearGradient id="g1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3b82f6"/><stop offset="1" stop-color="#06b6d4"/></linearGradient>
+ <radialGradient id="lens" cx="40%" cy="35%" r="70%"><stop offset="0" stop-color="#1e3a8a"/><stop offset="1" stop-color="#020617"/></radialGradient></defs>
+ <rect x="16" y="16" width="224" height="224" rx="56" fill="url(#g1)"/>
+ <rect x="48" y="78" width="160" height="112" rx="26" fill="#fff" opacity=".96"/>
+ <rect x="86" y="58" width="56" height="26" rx="10" fill="#fff" opacity=".96"/>
+ <circle cx="128" cy="134" r="46" fill="url(#lens)"/>
+ <circle cx="128" cy="134" r="36" fill="none" stroke="#60a5fa" stroke-width="3" opacity=".8"/>
+ <circle cx="112" cy="116" r="9" fill="#fff" opacity=".55"/>
+ <path d="M118 116 L152 134 L118 152 Z" fill="#fff"/>
+ <circle cx="186" cy="100" r="7" fill="#f97316"/>
+</svg>
+<div class="sizes"><div><svg width="64" height="64" viewBox="0 0 256 256"><use href="#i1"/></svg><br>64px</div><div><svg width="32" height="32" viewBox="0 0 256 256"><use href="#i1"/></svg><br>32px</div><div><svg width="16" height="16" viewBox="0 0 256 256"><use href="#i1"/></svg><br>16px</div></div>
+<p>흰 카메라 몸체와 렌즈 속 재생 삼각형. 맥 독(Dock)에서 다른 파란 앱(파인더, 사파리)과 구분되도록 몸체를 흰색으로 두고, 작은 크기에서도 삼각형이 잘 보입니다.</p></div>
+
+<div class="card"><h2>시안 2 · 필름 슬레이트(클래퍼) + 플레이</h2>
+<svg id="i2" width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+ <defs><linearGradient id="g2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1f2937"/><stop offset="1" stop-color="#0b1220"/></linearGradient>
+ <linearGradient id="g3" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#fbbf24"/><stop offset="1" stop-color="#f97316"/></linearGradient></defs>
+ <rect x="16" y="16" width="224" height="224" rx="56" fill="url(#g2)"/>
+ <g transform="rotate(-12 128 86)"><rect x="44" y="64" width="168" height="36" rx="8" fill="#fff"/>
+  <path d="M60 64 l24 36 h-24z M108 64 l24 36 h-24z M156 64 l24 36 h-24z" fill="#111"/></g>
+ <rect x="44" y="104" width="168" height="108" rx="16" fill="#fff"/>
+ <circle cx="128" cy="158" r="40" fill="url(#g3)"/>
+ <path d="M116 138 L152 158 L116 178 Z" fill="#fff"/>
+ <rect x="56" y="118" width="34" height="8" rx="4" fill="#e5e7eb"/><rect x="56" y="134" width="22" height="8" rx="4" fill="#e5e7eb"/>
+</svg>
+<div class="sizes"><div><svg width="64" height="64" viewBox="0 0 256 256"><use href="#i2"/></svg><br>64px</div><div><svg width="32" height="32" viewBox="0 0 256 256"><use href="#i2"/></svg><br>32px</div><div><svg width="16" height="16" viewBox="0 0 256 256"><use href="#i2"/></svg><br>16px</div></div>
+<p>영화 촬영 슬레이트와 주황 재생 버튼. "수업 영상 시간"이라는 느낌이 강하고, 어두운 바탕이라 밝은 화면 시안 A, 어두운 시안 B 어느 쪽과도 어울립니다.</p></div>
+</div></body></html>

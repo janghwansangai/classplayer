@@ -7,9 +7,9 @@ import sys
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QDragEnterEvent, QDropEvent, QKeySequence, QSurfaceFormat
-from PySide6.QtWidgets import (QAbstractSpinBox, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+from PySide6.QtWidgets import (QAbstractSpinBox, QFrame, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
                                QDockWidget, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
                                QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QTextEdit,
                                QToolButton, QVBoxLayout, QWidget)
@@ -19,6 +19,8 @@ from classplayer.bootstrap import APP_NAME, VIDEO_EXTENSIONS
 from classplayer.library.library import LibraryPanel
 from classplayer.player.controls import ControlBar
 from classplayer.player.mpv_widget import MpvWidget
+from classplayer.player.thumbnails import ThumbnailProvider
+from classplayer.player.controls import fmt_time
 from classplayer.settings import Settings
 from classplayer.youtube.common import is_url, is_youtube_url, youtube_video_id
 from classplayer.youtube.download import PRESETS, DownloadJob, DownloadRequest
@@ -198,6 +200,80 @@ class _ProbeNotifier(QObject):
     result = Signal(str, object)
 
 
+class SeekPreview(QFrame):
+    """슬라이더 위에 뜨는 썸네일 + 시간 말풍선."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent, Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setStyleSheet("QFrame { background: rgba(20,20,20,230); border-radius: 8px; }"
+                           "QLabel { color: white; }")
+        self.img = QLabel()
+        self.img.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.img.setFixedSize(224, 126)
+        self.time = QLabel("00:00")
+        self.time.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.time.setStyleSheet("font-size: 15px; font-weight: 600;")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(6, 6, 6, 6)
+        lay.setSpacing(4)
+        lay.addWidget(self.img)
+        lay.addWidget(self.time)
+
+    def show_at(self, pm, t: float, anchor: QPoint) -> None:
+        self.time.setText(fmt_time(t))
+        if pm is not None and not pm.isNull():
+            self.img.setPixmap(pm.scaled(self.img.size(), Qt.AspectRatioMode.KeepAspectRatio,
+                                         Qt.TransformationMode.SmoothTransformation))
+            self.img.show()
+        else:
+            self.img.clear()
+            self.img.setText("…")
+        self.adjustSize()
+        x = anchor.x() - self.width() // 2
+        y = anchor.y() - self.height() - 10
+        self.move(x, y)
+        if not self.isVisible():
+            self.show()
+
+
+class ClipboardBanner(QFrame):
+    """클립보드에 유튜브 링크가 있을 때 위쪽에 뜨는 한 줄 안내."""
+
+    play_clicked = Signal(str)
+    download_clicked = Signal(str)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.url = ""
+        self.setStyleSheet("ClipboardBanner { background: #fff6d6; border-bottom: 1px solid #e6d9a8; }")
+        self.label = QLabel("")
+        self.label.setStyleSheet("color: #5a4a00;")
+        b_play = QPushButton("바로 재생")
+        b_dl = QPushButton("다운로드")
+        b_close = QToolButton()
+        b_close.setText("✕")
+        b_close.setAutoRaise(True)
+        for b in (b_play, b_dl, b_close):
+            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        b_play.clicked.connect(lambda: self.play_clicked.emit(self.url))
+        b_dl.clicked.connect(lambda: self.download_clicked.emit(self.url))
+        b_close.clicked.connect(self.hide)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 4, 6, 4)
+        lay.addWidget(self.label, 1)
+        lay.addWidget(b_play)
+        lay.addWidget(b_dl)
+        lay.addWidget(b_close)
+        self.hide()
+
+    def offer(self, url: str) -> None:
+        self.url = url
+        short = url if len(url) < 70 else url[:67] + "…"
+        self.label.setText(f"복사해 둔 유튜브 링크가 있습니다: {short}")
+        self.show()
+
+
 # ====================================================================== 메인 창
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
@@ -233,17 +309,21 @@ class MainWindow(QMainWindow):
         self.url_edit.setPlaceholderText("유튜브 링크를 붙여넣거나 파일 경로를 입력하고 Enter")
         self.url_edit.setClearButtonEnabled(True)
         self.url_edit.returnPressed.connect(self.play_from_url_bar)
+        btn_paste = QPushButton("붙여넣고 재생")
+        btn_paste.setToolTip("복사한 링크를 바로 재생 (⌘V)")
+        btn_paste.clicked.connect(self.play_from_clipboard)
         btn_play = QPushButton("재생")
         btn_play.clicked.connect(self.play_from_url_bar)
         btn_dl = QPushButton("다운로드…")
         btn_dl.clicked.connect(self.open_download_dialog)
         btn_open = QPushButton("파일 열기…")
         btn_open.clicked.connect(self.open_file_dialog)
-        for b in (btn_play, btn_dl, btn_open):
+        for b in (btn_paste, btn_play, btn_dl, btn_open):
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         urlrow = QHBoxLayout()
         urlrow.setContentsMargins(8, 6, 8, 2)
         urlrow.addWidget(self.url_edit, 1)
+        urlrow.addWidget(btn_paste)
         urlrow.addWidget(btn_play)
         urlrow.addWidget(btn_dl)
         urlrow.addWidget(btn_open)
@@ -255,6 +335,10 @@ class MainWindow(QMainWindow):
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(0)
         v.addWidget(self.url_bar)
+        self.banner = ClipboardBanner()
+        self.banner.play_clicked.connect(self._banner_play)
+        self.banner.download_clicked.connect(self._banner_download)
+        v.addWidget(self.banner)
         v.addWidget(self.player, 1)
         v.addWidget(self.controls)
         self.setCentralWidget(central)
@@ -305,6 +389,20 @@ class MainWindow(QMainWindow):
         self._hide_timer.setInterval(2500)
         self._hide_timer.setSingleShot(True)
         self._hide_timer.timeout.connect(self._auto_hide_controls)
+
+        # --- 탐색 미리보기
+        self.thumbs = ThumbnailProvider(self.ffmpeg)
+        self.preview = SeekPreview()
+        self._preview_t = 0.0
+        self.thumbs.ready.connect(self._refresh_preview)
+        self.controls.preview_hover.connect(self._on_preview_hover)
+        self.controls.preview_leave.connect(self.preview.hide)
+        self.controls.seek_preview.connect(lambda t: self._on_preview_hover(t, None))
+
+        # --- 클립보드 유튜브 링크 감지
+        self._last_clip = ""
+        QApplication.instance().applicationStateChanged.connect(self._on_app_state)
+        QApplication.clipboard().dataChanged.connect(self._check_clipboard)
 
         self._connect_player()
         self._build_menus()
@@ -361,6 +459,7 @@ class MainWindow(QMainWindow):
         act(m_file, "파일 열기…", self.open_file_dialog, "Ctrl+O")
         act(m_file, "링크 입력창으로", lambda: (self.url_edit.setFocus(), self.url_edit.selectAll()), "Ctrl+L")
         act(m_file, "유튜브 다운로드…", self.open_download_dialog, "Ctrl+D")
+        act(m_file, "복사한 링크 붙여넣고 재생", self.play_from_clipboard, "Ctrl+V")
         self.m_recent = m_file.addMenu("최근 항목")
         self.m_recent.aboutToShow.connect(self._fill_recent)
         m_file.addSeparator()
@@ -447,6 +546,10 @@ class MainWindow(QMainWindow):
         self._current_is_youtube = is_youtube_url(target)
         self.url_edit.setText(target)
         self.skipper.clear()
+        self.thumbs.clear()
+        self.preview.hide()
+        self.banner.hide()
+        self._last_clip = QApplication.clipboard().text().strip()
         self.set_vr(False)
         self.settings.add_recent(target)
         if self._current_is_youtube:
@@ -468,6 +571,8 @@ class MainWindow(QMainWindow):
         self.player.play_stream(rs.video_url, rs.audio_url, title=rs.title, user_agent=rs.user_agent,
                                 subtitles=rs.subtitles)
         self._on_title(rs.title)
+        if rs.storyboards:
+            self.thumbs.load_storyboard(rs.storyboards)
         vid = rs.video_id or youtube_video_id(rs.url)
         if vid and self.a_sponsor.isChecked():
             self.skipper.load(vid)
@@ -500,6 +605,51 @@ class MainWindow(QMainWindow):
     def _on_file_loaded(self, path: str) -> None:
         self._update_info()
         self.player.add_pending_subtitles()
+        if self._current and not is_url(self._current):
+            dur = float(self.player.property("duration", 0.0) or 0.0)
+            self.thumbs.load_local(self._current, dur)
+
+    # ------------------------------------------------------------------ 탐색 미리보기
+    def _on_preview_hover(self, t: float, x) -> None:
+        self._preview_t = t
+        slider = self.controls.slider
+        if x is None:   # 드래그 중: 현재 핸들 위치
+            frac = slider.value() / max(1, slider.maximum())
+            x = int(frac * slider.width())
+        anchor = slider.mapToGlobal(QPoint(x, 0))
+        self.preview.show_at(self.thumbs.thumbnail(t), t, anchor)
+
+    def _refresh_preview(self) -> None:
+        if self.preview.isVisible():
+            self._on_preview_hover(self._preview_t, None if self.controls.slider.isSliderDown() else
+                                   self.preview.geometry().center().x() - self.controls.slider.mapToGlobal(QPoint(0, 0)).x())
+
+    # ------------------------------------------------------------------ 클립보드
+    def play_from_clipboard(self) -> None:
+        text = QApplication.clipboard().text().strip()
+        if is_url(text) or Path(text).exists():
+            self.open_target(text)
+        else:
+            self.statusBar().showMessage("복사해 둔 링크가 없습니다. 유튜브에서 주소를 복사한 뒤 눌러 주세요.", 5000)
+
+    def _on_app_state(self, state) -> None:
+        if state == Qt.ApplicationState.ApplicationActive:
+            self._check_clipboard()
+
+    def _check_clipboard(self) -> None:
+        text = QApplication.clipboard().text().strip()
+        if text and text != self._last_clip and is_youtube_url(text) and text != self._current:
+            self._last_clip = text
+            self.banner.offer(text)
+
+    def _banner_play(self, url: str) -> None:
+        self.banner.hide()
+        self.open_target(url)
+
+    def _banner_download(self, url: str) -> None:
+        self.banner.hide()
+        self.url_edit.setText(url)
+        self.open_download_dialog()
 
     def _on_title(self, title: str) -> None:
         self.lbl_title.setText(title)
@@ -634,6 +784,7 @@ class MainWindow(QMainWindow):
             self.dock_library.hide()
             self.dock_downloads.hide()
             self.url_bar.hide()
+            self.banner.hide()
             self.menuBar().hide()
             self.statusBar().hide()
             self.showFullScreen()
@@ -652,8 +803,9 @@ class MainWindow(QMainWindow):
             self.player.setCursor(Qt.CursorShape.OpenHandCursor if self.player.vr_enabled else Qt.CursorShape.ArrowCursor)
 
     def _auto_hide_controls(self) -> None:
-        if self._fullscreen:
+        if self._fullscreen and not self.controls.slider.isSliderDown() and not self.controls.underMouse():
             self.controls.hide()
+            self.preview.hide()
             self.player.setCursor(Qt.CursorShape.BlankCursor)
 
     def _on_mouse_moved(self) -> None:

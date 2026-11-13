@@ -26,6 +26,7 @@ class ResolvedStream:
     width: int = 0
     height: int = 0
     subtitles: list[tuple[str, str, str]] = field(default_factory=list)   # (lang, 이름, url)
+    storyboards: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _pick_sub_url(entry: dict[str, Any] | None) -> str:
@@ -63,6 +64,7 @@ def resolve_info(info: dict[str, Any], url: str) -> ResolvedStream:
         rs.user_agent = str((info.get("http_headers") or {}).get("User-Agent") or "")
     if not rs.video_url:
         raise RuntimeError("재생할 수 있는 스트림을 찾지 못했습니다")
+    rs.storyboards = [f for f in (info.get("formats") or []) if str(f.get("format_id", "")).startswith("sb")]
     subs = info.get("subtitles") or {}
     autos = info.get("automatic_captions") or {}
     for lang in SUB_LANGS:
