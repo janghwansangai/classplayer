@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClassPlayer 디자인 시안 v2</title>
+<style>
+  :root { --bg:#f3f4f6; --ink:#111827; --muted:#6b7280; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font-family:-apple-system,"Pretendard","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif; }
+  .wrap { max-width:1340px; margin:0 auto; padding:32px 24px 80px; }
+  h1 { font-size:26px; margin:0 0 6px; }
+  .lead { color:var(--muted); margin:0 0 36px; line-height:1.6; }
+  h2 { font-size:20px; margin:48px 0 6px; display:flex; align-items:center; gap:10px; }
+  h2 .tag { font-size:12px; font-weight:600; padding:3px 9px; border-radius:999px; background:#111827; color:#fff; }
+  .desc { color:var(--muted); margin:0 0 16px; line-height:1.6; }
+  .frame { width:1280px; max-width:100%; aspect-ratio:1280/800; border-radius:14px; overflow:hidden; box-shadow:0 20px 60px rgba(0,0,0,.25); position:relative; font-size:13px; }
+  .frame-fs { width:1280px; max-width:100%; aspect-ratio:1280/300; border-radius:14px; overflow:hidden; box-shadow:0 12px 40px rgba(0,0,0,.25); position:relative; margin-top:14px; }
+  .cap { color:var(--muted); font-size:12px; margin:8px 0 0; }
+  svg.i { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.9; stroke-linecap:round; stroke-linejoin:round; display:block; }
+  .pros { display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-top:18px; }
+  .pros div { background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:14px 16px; line-height:1.6; font-size:13px; }
+  .pros b { display:block; margin-bottom:4px; }
+
+  /* ---------- 공통: 영상 자리 ---------- */
+  .video { position:absolute; inset:0; background:
+      radial-gradient(1200px 600px at 60% 30%, #3b4a6b 0%, #1b2236 45%, #0b0f1a 100%); }
+  .video:after { content:""; position:absolute; inset:0; background:
+      linear-gradient(115deg, transparent 0 42%, rgba(255,255,255,.06) 42% 43%, transparent 43% 58%, rgba(255,255,255,.05) 58% 59%, transparent 59%),
+      radial-gradient(300px 140px at 28% 70%, rgba(245,158,11,.35), transparent 70%); }
+
+  /* =====================================================================
+     시안 C · 스튜디오 다크 (Insta360 Studio 느낌의 작업실형)
+     ===================================================================== */
+  .c { background:#141518; color:#e7e8ec; display:grid; grid-template-columns:272px 1fr; grid-template-rows:52px 1fr; }
+  .c .top { grid-column:1/3; display:flex; align-items:center; gap:14px; padding:0 16px; background:#1b1c21; border-bottom:1px solid #2a2b31; }
+  .c .logo { display:flex; align-items:center; gap:8px; font-weight:700; font-size:14px; letter-spacing:.2px; }
+  .c .logo i { width:26px; height:26px; border-radius:8px; background:linear-gradient(135deg,#f59e0b,#f97316); display:grid; place-items:center; }
+  .c .url { flex:1; display:flex; align-items:center; gap:10px; height:34px; border-radius:10px; background:#101114; border:1px solid #2a2b31; padding:0 12px; color:#9a9ca6; }
+  .c .url b { color:#e7e8ec; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .c .btn { height:34px; padding:0 14px; border-radius:10px; display:flex; align-items:center; gap:7px; background:#26272e; color:#e7e8ec; font-weight:600; }
+  .c .btn.primary { background:#f59e0b; color:#1b1206; }
+  .c .side { background:#17181c; border-right:1px solid #2a2b31; display:flex; flex-direction:column; min-height:0; }
+  .c .side h3 { margin:0; padding:14px 16px 8px; font-size:12px; font-weight:600; color:#9a9ca6; letter-spacing:.6px; text-transform:uppercase; display:flex; justify-content:space-between; }
+  .c .search { margin:0 12px 10px; height:32px; border-radius:9px; background:#101114; border:1px solid #2a2b31; display:flex; align-items:center; gap:8px; padding:0 10px; color:#6b6e7a; }
+  .c .chips { display:flex; gap:6px; padding:0 12px 10px; flex-wrap:wrap; }
+  .c .chip { font-size:11px; padding:4px 9px; border-radius:999px; background:#26272e; color:#c3c5cd; }
+  .c .chip.on { background:#3b2f12; color:#fbbf24; }
+  .c .list { overflow:hidden; padding:0 8px; display:flex; flex-direction:column; gap:4px; }
+  .c .item { display:grid; grid-template-columns:88px 1fr; gap:10px; padding:6px; border-radius:10px; align-items:center; }
+  .c .item.on { background:#26272e; outline:1px solid #3a3b44; }
+  .c .th { width:88px; height:52px; border-radius:7px; background:linear-gradient(135deg,#2c3e6b,#17213a); position:relative; overflow:hidden; }
+  .c .th.b { background:linear-gradient(135deg,#6b4a2c,#3a2417); }
+  .c .th.g { background:linear-gradient(135deg,#2c6b45,#17352a); }
+  .c .th.p { background:linear-gradient(135deg,#5d2c6b,#2d1735); }
+  .c .th s { position:absolute; right:4px; bottom:4px; font-size:10px; text-decoration:none; background:rgba(0,0,0,.65); padding:1px 5px; border-radius:4px; }
+  .c .th em { position:absolute; left:4px; top:4px; font-size:9px; font-style:normal; background:#f59e0b; color:#1b1206; padding:1px 5px; border-radius:4px; font-weight:700; }
+  .c .item b { display:block; font-weight:600; font-size:12.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .c .item span { color:#8b8e99; font-size:11px; }
+  .c .stage { position:relative; min-height:0; }
+  .c .osd { position:absolute; left:18px; top:16px; display:flex; gap:8px; }
+  .c .pill { height:26px; padding:0 10px; border-radius:999px; background:rgba(16,17,20,.72); border:1px solid rgba(255,255,255,.12); display:flex; align-items:center; gap:6px; font-size:11.5px; backdrop-filter:blur(8px); }
+  .c .pill.amber { color:#fbbf24; }
+  .c .reticle { position:absolute; right:22px; top:16px; width:84px; height:84px; border-radius:50%; background:rgba(16,17,20,.6); border:1px solid rgba(255,255,255,.15); backdrop-filter:blur(8px); }
+  .c .reticle:before { content:""; position:absolute; inset:14px; border-radius:50%; border:1px dashed rgba(255,255,255,.3); }
+  .c .reticle:after { content:""; position:absolute; left:50%; top:50%; width:30px; height:30px; margin:-15px 0 0 -15px; border-radius:50%; background:conic-gradient(from -35deg, rgba(245,158,11,.9) 0 70deg, transparent 70deg); }
+  .c .reticle i { position:absolute; left:50%; top:50%; width:6px; height:6px; margin:-3px; border-radius:50%; background:#fbbf24; }
+  .c .bar { position:absolute; left:50%; bottom:22px; transform:translateX(-50%); width:calc(100% - 48px); max-width:960px; height:64px; border-radius:18px; background:rgba(20,21,24,.86); border:1px solid rgba(255,255,255,.14); backdrop-filter:blur(14px); display:grid; grid-template-rows:20px 1fr; padding:8px 18px 6px; gap:4px; }
+  .c .seek { position:relative; height:20px; display:flex; align-items:center; }
+  .c .seek .track { position:absolute; left:0; right:0; height:4px; border-radius:2px; background:rgba(255,255,255,.14); }
+  .c .seek .buf { position:absolute; left:0; width:58%; height:4px; border-radius:2px; background:rgba(255,255,255,.22); }
+  .c .seek .fill { position:absolute; left:0; width:34%; height:4px; border-radius:2px; background:#f59e0b; }
+  .c .seek .knob { position:absolute; left:34%; width:14px; height:14px; margin-left:-7px; border-radius:50%; background:#fff; box-shadow:0 0 0 4px rgba(245,158,11,.35); }
+  .c .seek .skip { position:absolute; left:71%; width:6%; height:4px; background:#ef4444; border-radius:2px; opacity:.85; }
+  .c .seek .tip { position:absolute; left:34%; bottom:26px; transform:translateX(-50%); width:120px; height:78px; border-radius:8px; background:linear-gradient(135deg,#2c3e6b,#17213a); border:1px solid rgba(255,255,255,.2); box-shadow:0 8px 24px rgba(0,0,0,.5); }
+  .c .seek .tip s { position:absolute; left:50%; bottom:-20px; transform:translateX(-50%); text-decoration:none; font-size:11px; background:#000; padding:2px 7px; border-radius:5px; }
+  .c .row { display:flex; align-items:center; gap:6px; }
+  .c .ib { width:32px; height:32px; border-radius:9px; display:grid; place-items:center; color:#d9dbe3; }
+  .c .ib.play { width:40px; height:40px; border-radius:12px; background:#f59e0b; color:#1b1206; }
+  .c .ib.on { background:#3b2f12; color:#fbbf24; }
+  .c .time { font-variant-numeric:tabular-nums; color:#c3c5cd; margin:0 10px; font-size:12.5px; }
+  .c .time b { color:#fff; font-weight:600; }
+  .c .sp { flex:1; }
+  .c .vol { width:90px; height:4px; border-radius:2px; background:rgba(255,255,255,.14); position:relative; margin:0 8px; }
+  .c .vol:before { content:""; position:absolute; left:0; width:70%; height:4px; border-radius:2px; background:#d9dbe3; }
+  .c .speed { height:30px; padding:0 10px; border-radius:9px; border:1px solid rgba(255,255,255,.18); display:flex; align-items:center; gap:6px; font-weight:700; color:#fff; }
+  .c .status { position:absolute; left:0; right:0; bottom:0; height:0; }
+  .c .toast { position:absolute; left:50%; top:16px; transform:translateX(-50%); height:34px; padding:0 14px; border-radius:10px; background:#101114; border:1px solid #2a2b31; display:flex; align-items:center; gap:8px; font-size:12.5px; box-shadow:0 10px 30px rgba(0,0,0,.4); }
+  .c .toast i { width:8px; height:8px; border-radius:50%; background:#22c55e; }
+
+  /* =====================================================================
+     시안 D · 클래스보드 (교실 모니터·전자칠판용 크고 밝은 디자인)
+     ===================================================================== */
+  .d { background:#f6f7fb; color:#0f172a; display:grid; grid-template-rows:64px 1fr 88px; }
+  .d .top { display:flex; align-items:center; gap:14px; padding:0 20px; background:#fff; border-bottom:1px solid #e6e8f0; }
+  .d .logo { display:flex; align-items:center; gap:10px; font-weight:800; font-size:16px; color:#1e3a8a; }
+  .d .logo i { width:32px; height:32px; border-radius:10px; background:linear-gradient(135deg,#2563eb,#7c3aed); display:grid; place-items:center; color:#fff; }
+  .d .url { flex:1; display:flex; align-items:center; gap:10px; height:42px; border-radius:14px; background:#f1f3f9; border:1.5px solid #e2e5ee; padding:0 14px; color:#64748b; font-size:14px; }
+  .d .url b { color:#0f172a; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .d .btn { height:42px; padding:0 18px; border-radius:14px; display:flex; align-items:center; gap:8px; background:#eef2ff; color:#1e3a8a; font-weight:700; font-size:14px; }
+  .d .btn.primary { background:#2563eb; color:#fff; box-shadow:0 6px 16px rgba(37,99,235,.3); }
+  .d .btn.ghost { background:transparent; border:1.5px solid #e2e5ee; color:#334155; }
+  .d .body { display:grid; grid-template-columns:1fr 300px; min-height:0; }
+  .d .stage { position:relative; margin:16px 0 16px 16px; border-radius:18px; overflow:hidden; background:#000; box-shadow:0 10px 30px rgba(15,23,42,.15); }
+  .d .hud { position:absolute; left:16px; top:14px; display:flex; gap:8px; }
+  .d .hud span { height:28px; padding:0 11px; border-radius:999px; background:rgba(255,255,255,.92); color:#0f172a; font-weight:700; font-size:12px; display:flex; align-items:center; gap:6px; box-shadow:0 2px 8px rgba(0,0,0,.2); }
+  .d .hud span.blue { background:#2563eb; color:#fff; }
+  .d .big { position:absolute; left:50%; top:50%; width:92px; height:92px; margin:-46px; border-radius:50%; background:rgba(255,255,255,.14); border:2px solid rgba(255,255,255,.45); backdrop-filter:blur(6px); display:grid; place-items:center; color:#fff; opacity:.0; }
+  .d .arrows { position:absolute; inset:0; pointer-events:none; }
+  .d .arrows i { position:absolute; width:40px; height:40px; border-radius:50%; background:rgba(255,255,255,.14); border:1.5px solid rgba(255,255,255,.4); display:grid; place-items:center; color:#fff; }
+  .d .panel { margin:16px 16px 16px 12px; background:#fff; border:1px solid #e6e8f0; border-radius:18px; display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+  .d .panel h3 { margin:0; padding:14px 16px 10px; font-size:14px; display:flex; justify-content:space-between; align-items:center; }
+  .d .panel h3 small { color:#64748b; font-weight:500; font-size:12px; }
+  .d .tabs { display:flex; gap:6px; padding:0 12px 10px; }
+  .d .tab { font-size:12px; font-weight:700; padding:6px 11px; border-radius:999px; background:#f1f3f9; color:#475569; }
+  .d .tab.on { background:#1e3a8a; color:#fff; }
+  .d .search { margin:0 12px 10px; height:36px; border-radius:11px; background:#f1f3f9; display:flex; align-items:center; gap:8px; padding:0 11px; color:#94a3b8; font-size:13px; }
+  .d .cards { padding:0 12px; display:grid; grid-template-columns:1fr 1fr; gap:10px; overflow:hidden; }
+  .d .card { border-radius:12px; overflow:hidden; background:#f8fafc; border:1px solid #eef0f5; }
+  .d .card.on { outline:2px solid #2563eb; }
+  .d .card .th { height:72px; background:linear-gradient(135deg,#3b4a6b,#1b2236); position:relative; }
+  .d .card .th.b { background:linear-gradient(135deg,#b45309,#78350f); }
+  .d .card .th.g { background:linear-gradient(135deg,#047857,#064e3b); }
+  .d .card .th.p { background:linear-gradient(135deg,#7e22ce,#4c1d95); }
+  .d .card .th.y { background:linear-gradient(135deg,#dc2626,#7f1d1d); }
+  .d .card .th s { position:absolute; right:5px; bottom:5px; font-size:10px; text-decoration:none; background:rgba(0,0,0,.7); color:#fff; padding:1px 5px; border-radius:4px; }
+  .d .card .th em { position:absolute; left:5px; top:5px; font-size:9px; font-style:normal; background:#fff; color:#1e3a8a; padding:1px 5px; border-radius:4px; font-weight:800; }
+  .d .card b { display:block; padding:7px 9px 8px; font-size:12px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .d .bar { display:grid; grid-template-rows:26px 1fr; padding:10px 24px 10px; gap:6px; background:#fff; border-top:1px solid #e6e8f0; }
+  .d .seek { position:relative; height:26px; display:flex; align-items:center; }
+  .d .seek .track { position:absolute; left:0; right:0; height:8px; border-radius:4px; background:#e6e8f0; }
+  .d .seek .fill { position:absolute; left:0; width:34%; height:8px; border-radius:4px; background:linear-gradient(90deg,#2563eb,#7c3aed); }
+  .d .seek .knob { position:absolute; left:34%; width:22px; height:22px; margin-left:-11px; border-radius:50%; background:#fff; border:3px solid #2563eb; box-shadow:0 2px 8px rgba(37,99,235,.4); }
+  .d .seek .chap { position:absolute; width:2px; height:8px; background:#fff; opacity:.9; }
+  .d .seek .skip { position:absolute; left:71%; width:6%; height:8px; background:#fca5a5; border-radius:4px; }
+  .d .seek .tip { position:absolute; left:34%; bottom:30px; transform:translateX(-50%); width:150px; height:96px; border-radius:12px; background:linear-gradient(135deg,#3b4a6b,#1b2236); border:3px solid #fff; box-shadow:0 12px 30px rgba(15,23,42,.35); }
+  .d .seek .tip s { position:absolute; left:50%; bottom:-26px; transform:translateX(-50%); text-decoration:none; font-size:12px; font-weight:700; background:#0f172a; color:#fff; padding:3px 9px; border-radius:7px; }
+  .d .row { display:flex; align-items:center; gap:8px; }
+  .d .ib { width:40px; height:40px; border-radius:12px; display:grid; place-items:center; color:#334155; background:#f1f3f9; }
+  .d .ib.play { width:54px; height:54px; border-radius:16px; background:#2563eb; color:#fff; box-shadow:0 8px 18px rgba(37,99,235,.35); }
+  .d .ib.on { background:#dbeafe; color:#1d4ed8; }
+  .d .lab { display:flex; flex-direction:column; align-items:center; gap:3px; font-size:10px; color:#64748b; font-weight:600; }
+  .d .time { font-variant-numeric:tabular-nums; font-size:15px; margin:0 12px; color:#334155; }
+  .d .time b { color:#0f172a; font-weight:800; }
+  .d .sp { flex:1; }
+  .d .vol { width:110px; height:8px; border-radius:4px; background:#e6e8f0; position:relative; margin:0 6px; }
+  .d .vol:before { content:""; position:absolute; left:0; width:70%; height:8px; border-radius:4px; background:#334155; }
+  .d .seg { display:flex; border:1.5px solid #e2e5ee; border-radius:12px; overflow:hidden; height:40px; }
+  .d .seg span { padding:0 12px; display:flex; align-items:center; font-weight:700; font-size:13px; color:#475569; border-right:1.5px solid #e2e5ee; }
+  .d .seg span:last-child { border-right:none; }
+  .d .seg span.on { background:#1e3a8a; color:#fff; }
+  .d .toast { position:absolute; left:50%; top:14px; transform:translateX(-50%); height:36px; padding:0 14px; border-radius:12px; background:#fff; color:#0f172a; display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; box-shadow:0 10px 30px rgba(15,23,42,.3); }
+  .d .toast i { width:9px; height:9px; border-radius:50%; background:#22c55e; }
+
+  /* 전체화면 바 (두 시안) */
+  .fsc { background:#000; }
+  .fsc .bar { position:absolute; left:50%; bottom:28px; transform:translateX(-50%); width:960px; max-width:92%; }
+  .fsd { background:#000; }
+  .fsd .bar { position:absolute; left:50%; bottom:24px; transform:translateX(-50%); width:1000px; max-width:92%; height:84px; border-radius:22px; background:rgba(255,255,255,.96); box-shadow:0 20px 50px rgba(0,0,0,.5); display:grid; grid-template-rows:26px 1fr; padding:10px 22px 10px; gap:6px; border-top:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>ClassPlayer 디자인 시안 v2</h1>
+  <p class="lead">현재 구현(시안 A)의 아쉬운 점: 흰 띠 위에 글자 버튼(자막·캡처·360°)이 나열되어 '도구'처럼 보이고, 영상과 조작부가 분리되어 밋밋합니다. 아래 두 시안은 아이콘 기반 조작부, 영상 위에 뜨는 상태 표시(HUD), 썸네일 중심 라이브러리로 '플레이어'다운 인상을 목표로 했습니다. 하나를 고르시면(혼합도 가능) QSS·아이콘·레이아웃을 그대로 코드에 옮깁니다.</p>
+
+  <!-- ================================================================ C -->
+  <h2><span class="tag">시안 C</span> 스튜디오 다크 <span style="font-weight:500;color:#6b7280;font-size:14px">· Insta360 Studio 같은 작업실 느낌</span></h2>
+  <p class="desc">짙은 차콜 바탕에 호박색(앰버) 포인트. 영상이 가장 밝은 요소가 되도록 주변을 어둡게 눌러 교실 프로젝터에서도 영상에 집중됩니다. 컨트롤바는 영상 위에 떠 있는 유리판, 오른쪽 위 원형 나침반이 360도 시점을 보여 줍니다. 라이브러리는 큰 썸네일 + 360°/4K 배지.</p>
+  <div class="frame c">
+    <div class="top">
+      <div class="logo"><i><svg class="i" viewBox="0 0 24 24" style="width:15px;height:15px;color:#1b1206"><path d="M5 4l14 8-14 8z" fill="currentColor" stroke="none"/></svg></i>ClassPlayer</div>
+      <div class="url"><svg class="i" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg><b>https://youtu.be/dQw4w9WgXcQ · 4학년 과학 — 화산과 지진</b><span>⌘V</span></div>
+      <div class="btn primary"><svg class="i" viewBox="0 0 24 24" style="width:16px;height:16px"><path d="M5 4l14 8-14 8z" fill="currentColor"/></svg>붙여넣고 재생</div>
+      <div class="btn"><svg class="i" viewBox="0 0 24 24" style="width:16px;height:16px"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>미리 받기</div>
+      <div class="btn"><svg class="i" viewBox="0 0 24 24" style="width:16px;height:16px"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>파일</div>
+    </div>
+    <div class="side">
+      <h3>라이브러리 <span>12개</span></h3>
+      <div class="search"><svg class="i" viewBox="0 0 24 24" style="width:15px;height:15px"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>영상 검색…</div>
+      <div class="chips"><span class="chip on">전체</span><span class="chip">360°</span><span class="chip">다운로드</span><span class="chip">최근</span></div>
+      <div class="list">
+        <div class="item on"><div class="th"><em>360°</em><s>08:07</s></div><div><b>VID_20260315_하동여행.insv</b><span>5.7K · Insta360 · 어제</span></div></div>
+        <div class="item"><div class="th b"><s>12:40</s></div><div><b>화산과 지진 — 4학년 과학</b><span>1080p · 유튜브 다운로드</span></div></div>
+        <div class="item"><div class="th g"><em>360°</em><s>03:12</s></div><div><b>DJI_20260410_플로깅.OSV</b><span>8K · DJI Osmo 360</span></div></div>
+        <div class="item"><div class="th p"><s>01:49</s></div><div><b>운동회 하이라이트.mp4</b><span>4K60 · HEVC</span></div></div>
+        <div class="item"><div class="th"><s>22:05</s></div><div><b>독도 다큐멘터리.mkv</b><span>1080p · 자막 ko</span></div></div>
+        <div class="item"><div class="th b"><s>06:30</s></div><div><b>우리 동네 지도 그리기.mov</b><span>1080p</span></div></div>
+        <div class="item"><div class="th g"><s>09:58</s></div><div><b>태양계 여행.mp4</b><span>4K · AV1</span></div></div>
+      </div>
+    </div>
+    <div class="stage">
+      <div class="video"></div>
+      <div class="toast"><i></i>360도 영상으로 감지해 360도 모드를 켰습니다</div>
+      <div class="osd">
+        <span class="pill amber"><svg class="i" viewBox="0 0 24 24" style="width:13px;height:13px"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></svg>360° · 시야 95°</span>
+        <span class="pill">H.265 · 3840×3840 ×2 · 하드웨어</span>
+        <span class="pill">1.5×</span>
+      </div>
+      <div class="reticle"><i></i></div>
+      <div class="bar">
+        <div class="seek"><div class="track"></div><div class="buf"></div><div class="fill"></div><div class="skip"></div><div class="knob"></div><div class="tip"><s>02:45</s></div></div>
+        <div class="row">
+          <div class="ib"><svg class="i" viewBox="0 0 24 24"><path d="M11 19l-7-7 7-7M20 19l-7-7 7-7"/></svg></div>
+          <div class="ib play"><svg class="i" viewBox="0 0 24 24" style="width:20px;height:20px"><path d="M7 5h3v14H7zM14 5h3v14h-3z" fill="currentColor" stroke="none"/></svg></div>
+          <div class="ib"><svg class="i" viewBox="0 0 24 24"><path d="M13 5l7 7-7 7M4 5l7 7-7 7"/></svg></div>
+          <div class="time"><b>02:45</b> / 08:07</div>
+          <div class="ib"><svg class="i" viewBox="0 0 24 24"><path d="M4 10v4h4l5 4V6l-5 4zM16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/></svg></div>
+          <div class="vol"></div>
+          <div class="sp"></div>
+          <div class="speed">1.5× <svg class="i" viewBox="0 0 24 24" style="width:12px;height:12px"><path d="M6 9l6 6 6-6"/></svg></div>
+          <div class="ib on" title="자막"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 12h4M7 15h7M13 12h4"/></svg></div>
+          <div class="ib" title="캡처"><svg class="i" viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></div>
+          <div class="ib on" title="360°"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></svg></div>
+          <div class="ib" title="시점 초기화"><svg class="i" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/></svg></div>
+          <div class="ib" title="소리만"><svg class="i" viewBox="0 0 24 24"><path d="M4 14v-4a8 8 0 0 1 16 0v4"/><rect x="3" y="14" width="4" height="6" rx="1"/><rect x="17" y="14" width="4" height="6" rx="1"/></svg></div>
+          <div class="ib" title="전체화면"><svg class="i" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <p class="cap">창 모드. 영상 위의 작은 알약(HUD)이 360°·코덱·배속 상태를 보여 주고, 오른쪽 위 나침반은 마우스로 돌린 시점을 표시합니다. 탐색바 위 빨간 구간은 스폰서블록 건너뛰기 구간.</p>
+  <div class="frame-fs fsc c">
+    <div class="video"></div>
+    <div class="bar">
+      <div class="seek"><div class="track"></div><div class="buf"></div><div class="fill"></div><div class="skip"></div><div class="knob"></div></div>
+      <div class="row">
+        <div class="ib"><svg class="i" viewBox="0 0 24 24"><path d="M11 19l-7-7 7-7M20 19l-7-7 7-7"/></svg></div>
+        <div class="ib play"><svg class="i" viewBox="0 0 24 24" style="width:20px;height:20px"><path d="M7 5h3v14H7zM14 5h3v14h-3z" fill="currentColor" stroke="none"/></svg></div>
+        <div class="ib"><svg class="i" viewBox="0 0 24 24"><path d="M13 5l7 7-7 7M4 5l7 7-7 7"/></svg></div>
+        <div class="time"><b>02:45</b> / 08:07</div>
+        <div class="ib"><svg class="i" viewBox="0 0 24 24"><path d="M4 10v4h4l5 4V6l-5 4zM16 9a4 4 0 0 1 0 6"/></svg></div>
+        <div class="vol"></div><div class="sp"></div>
+        <div class="speed">1.5× <svg class="i" viewBox="0 0 24 24" style="width:12px;height:12px"><path d="M6 9l6 6 6-6"/></svg></div>
+        <div class="ib on"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 12h4M7 15h7M13 12h4"/></svg></div>
+        <div class="ib"><svg class="i" viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></div>
+        <div class="ib on"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></svg></div>
+        <div class="ib"><svg class="i" viewBox="0 0 24 24"><path d="M9 9V4h-5M15 9V4h5M9 15v5h-5M15 15v5h5"/></svg></div>
+      </div>
+    </div>
+  </div>
+  <p class="cap">전체화면. 같은 유리판 바가 마우스를 멈추면 사라집니다.</p>
+
+  <!-- ================================================================ D -->
+  <h2><span class="tag">시안 D</span> 클래스보드 <span style="font-weight:500;color:#6b7280;font-size:14px">· 전자칠판·교실 모니터용, 크고 선명한 조작부</span></h2>
+  <p class="desc">교실 뒤에서도 보이는 큰 버튼과 굵은 탐색바. 라이브러리는 오른쪽 카드 그리드로 수업 자료를 한눈에 고르고, 자주 쓰는 조작(재생·10초·배속·360°)은 아래 넓은 바에 아이콘+이름으로 둡니다. 파란색 한 가지 포인트, 흰 바탕. 터치 전자칠판에서도 손가락으로 조작하기 좋습니다.</p>
+  <div class="frame d">
+    <div class="top">
+      <div class="logo"><i><svg class="i" viewBox="0 0 24 24" style="width:17px;height:17px"><path d="M5 4l14 8-14 8z" fill="currentColor" stroke="none"/></svg></i>ClassPlayer</div>
+      <div class="url"><svg class="i" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg><b>유튜브 링크를 붙여넣거나 파일을 끌어다 놓으세요</b></div>
+      <div class="btn primary"><svg class="i" viewBox="0 0 24 24" style="width:16px;height:16px"><path d="M5 4l14 8-14 8z" fill="currentColor"/></svg>붙여넣고 재생</div>
+      <div class="btn"><svg class="i" viewBox="0 0 24 24" style="width:16px;height:16px"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>미리 받기</div>
+      <div class="btn ghost"><svg class="i" viewBox="0 0 24 24" style="width:16px;height:16px"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>파일 열기</div>
+    </div>
+    <div class="body">
+      <div class="stage">
+        <div class="video"></div>
+        <div class="toast"><i></i>360도 영상입니다 · 마우스로 끌어서 둘러보세요</div>
+        <div class="hud"><span class="blue"><svg class="i" viewBox="0 0 24 24" style="width:13px;height:13px"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></svg>360°</span><span>8K · 하드웨어 디코딩</span><span>1.5×</span></div>
+        <div class="arrows">
+          <i style="left:16px;top:50%;margin-top:-20px"><svg class="i" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></i>
+          <i style="right:16px;top:50%;margin-top:-20px"><svg class="i" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></i>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>수업 자료 <small>12개</small></h3>
+        <div class="tabs"><span class="tab on">전체</span><span class="tab">360°</span><span class="tab">받은 영상</span></div>
+        <div class="search"><svg class="i" viewBox="0 0 24 24" style="width:15px;height:15px"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>검색…</div>
+        <div class="cards">
+          <div class="card on"><div class="th"><em>360°</em><s>08:07</s></div><b>하동여행.insv</b></div>
+          <div class="card"><div class="th b"><s>12:40</s></div><b>화산과 지진</b></div>
+          <div class="card"><div class="th g"><em>360°</em><s>03:12</s></div><b>플로깅.OSV</b></div>
+          <div class="card"><div class="th p"><s>01:49</s></div><b>운동회 하이라이트</b></div>
+          <div class="card"><div class="th y"><s>22:05</s></div><b>독도 다큐</b></div>
+          <div class="card"><div class="th"><s>06:30</s></div><b>동네 지도 그리기</b></div>
+          <div class="card"><div class="th g"><s>09:58</s></div><b>태양계 여행</b></div>
+          <div class="card"><div class="th b"><s>04:21</s></div><b>줄넘기 시범</b></div>
+        </div>
+      </div>
+    </div>
+    <div class="bar">
+      <div class="seek"><div class="track"></div><div class="fill"></div><div class="skip"></div><div class="knob"></div><div class="tip"><s>02:45</s></div></div>
+      <div class="row">
+        <div class="lab"><div class="ib"><svg class="i" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/><text x="8.5" y="15.5" font-size="8" font-weight="700" fill="currentColor" stroke="none">10</text></svg></div></div>
+        <div class="ib play"><svg class="i" viewBox="0 0 24 24" style="width:26px;height:26px"><path d="M7 5h3v14H7zM14 5h3v14h-3z" fill="currentColor" stroke="none"/></svg></div>
+        <div class="lab"><div class="ib"><svg class="i" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5"/><text x="8.5" y="15.5" font-size="8" font-weight="700" fill="currentColor" stroke="none">10</text></svg></div></div>
+        <div class="time"><b>02:45</b> / 08:07</div>
+        <div class="ib"><svg class="i" viewBox="0 0 24 24"><path d="M4 10v4h4l5 4V6l-5 4zM16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/></svg></div>
+        <div class="vol"></div>
+        <div class="sp"></div>
+        <div class="seg"><span>0.75×</span><span>1×</span><span>1.25×</span><span class="on">1.5×</span><span>2×</span></div>
+        <div class="lab"><div class="ib on"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 12h4M7 15h7M13 12h4"/></svg></div>자막</div>
+        <div class="lab"><div class="ib"><svg class="i" viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></div>캡처</div>
+        <div class="lab"><div class="ib on"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></svg></div>360°</div>
+        <div class="lab"><div class="ib"><svg class="i" viewBox="0 0 24 24"><path d="M4 14v-4a8 8 0 0 1 16 0v4"/><rect x="3" y="14" width="4" height="6" rx="1"/><rect x="17" y="14" width="4" height="6" rx="1"/></svg></div>소리만</div>
+        <div class="lab"><div class="ib"><svg class="i" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></div>전체화면</div>
+      </div>
+    </div>
+  </div>
+  <p class="cap">창 모드. 버튼 아래 이름이 있어 처음 보는 선생님도 바로 씁니다. 배속은 눌러서 고르는 분할 버튼(드롭다운 없음). 360도 영상에선 화면 양옆에 돌리기 화살표가 살짝 뜹니다.</p>
+  <div class="frame-fs fsd d">
+    <div class="video"></div>
+    <div class="bar">
+      <div class="seek"><div class="track"></div><div class="fill"></div><div class="skip"></div><div class="knob"></div></div>
+      <div class="row">
+        <div class="ib"><svg class="i" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/><text x="8.5" y="15.5" font-size="8" font-weight="700" fill="currentColor" stroke="none">10</text></svg></div>
+        <div class="ib play"><svg class="i" viewBox="0 0 24 24" style="width:26px;height:26px"><path d="M7 5h3v14H7zM14 5h3v14h-3z" fill="currentColor" stroke="none"/></svg></div>
+        <div class="ib"><svg class="i" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5"/><text x="8.5" y="15.5" font-size="8" font-weight="700" fill="currentColor" stroke="none">10</text></svg></div>
+        <div class="time"><b>02:45</b> / 08:07</div>
+        <div class="ib"><svg class="i" viewBox="0 0 24 24"><path d="M4 10v4h4l5 4V6l-5 4zM16 9a4 4 0 0 1 0 6"/></svg></div>
+        <div class="vol"></div><div class="sp"></div>
+        <div class="seg"><span>1×</span><span class="on">1.5×</span><span>2×</span></div>
+        <div class="ib on"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 12h4M7 15h7M13 12h4"/></svg></div>
+        <div class="ib"><svg class="i" viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></div>
+        <div class="ib on"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></svg></div>
+        <div class="ib"><svg class="i" viewBox="0 0 24 24"><path d="M9 9V4h-5M15 9V4h5M9 15v5h-5M15 15v5h5"/></svg></div>
+      </div>
+    </div>
+  </div>
+  <p class="cap">전체화면. 흰 플로팅 바(불투명)라 어떤 영상 위에서도 글자가 또렷합니다.</p>
+
+  <div class="pros">
+    <div><b>시안 C · 스튜디오 다크</b>영상 몰입감이 가장 좋고 전문 편집 프로그램 같은 인상. 어두운 교실·프로젝터에 유리. 글자 대비는 흰 글자/앰버 포인트로 확보. 단, 밝은 교실의 전자칠판에서는 D보다 덜 선명할 수 있음.</div>
+    <div><b>시안 D · 클래스보드</b>처음 쓰는 선생님·학생도 헤매지 않는 큰 버튼과 이름표. 터치 전자칠판에 적합. 배속은 드롭다운 대신 한 번에 보이는 분할 버튼이라 "배속이 어디 있지" 문제가 없음. 화면이 다소 '도구'처럼 보일 수 있음.</div>
+  </div>
+</div>
+</body>
+</html>
