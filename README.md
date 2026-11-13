@@ -9,7 +9,16 @@
 - **360도 영상**: 마우스 드래그로 둘러보기, 휠/트랙패드 핀치로 확대. 확대 시 바이큐빅 표본화로 뭉개짐을 줄이고, 화질 보호 확대 한계(기본 3배) 제공. 일반 360도 파일(등장방형)과 유튜브 EAC 큐브맵, 상하/좌우 분할 입체 모두 지원
 - **라이브러리 검색**: 폴더를 등록하면 파일명으로 바로 검색
 
-## 요구 사항 (맥)
+## 바로 받기
+
+설치 없이 쓰려면 [릴리스 페이지](https://github.com/janghwansangai/classplayer/releases)에서 받으세요.
+
+- 맥(Apple Silicon): `ClassPlayer-mac-arm64.zip` → 풀어서 `ClassPlayer.app`을 응용 프로그램 폴더로. 처음 한 번은 **우클릭 > 열기**.
+- 윈도우: `ClassPlayer-windows-x64.zip` → 풀어서 `ClassPlayer.exe` 실행. SmartScreen 경고가 뜨면 **추가 정보 > 실행**.
+
+두 파일 모두 GitHub Actions가 자동으로 빌드합니다 (`v*` 태그를 올리면 릴리스에 붙습니다).
+
+## 요구 사항 (맥, 소스로 실행할 때)
 
 ```bash
 brew install mpv ffmpeg deno
