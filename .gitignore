@@ -14,3 +14,4 @@ build/
 !tests/assets/screenshot_*.png
 bin/
 selftest.mp4
+!packaging/classplayer.spec
