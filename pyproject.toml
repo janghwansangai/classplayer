@@ -1,0 +1,27 @@
+[project]
+name = "classplayer"
+version = "0.1.0"
+description = "수업용 영상 플레이어: 모든 코덱, 360도, 유튜브 광고 없이 재생/다운로드"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "PySide6>=6.8",
+    "python-mpv>=1.0.7",
+    "yt-dlp[default]>=2026.1.1",
+    "PyOpenGL>=3.1.7",
+]
+
+[project.scripts]
+classplayer = "classplayer.app:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/classplayer"]
+
+[tool.uv]
+dev-dependencies = [
+    "pyinstaller>=6.22.3",
+    "pytest>=8",
+]
