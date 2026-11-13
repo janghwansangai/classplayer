@@ -79,7 +79,9 @@ class ControlBar(QWidget):
             b.setAutoRaise(True)
             return b
 
-        self.btn_play = tool("", "재생/일시정지 (Space)", QStyle.StandardPixmap.SP_MediaPlay)
+        self.btn_play = tool("▶", "재생/일시정지 (Space)")
+        self.btn_play.setObjectName("play")
+        self.btn_play.setStyleSheet("color: white; font-size: 16px; font-weight: 700;")
         self.btn_play.clicked.connect(self.play_clicked)
         self.btn_back = tool("", "10초 뒤로 (←)", QStyle.StandardPixmap.SP_MediaSeekBackward)
         self.btn_fwd = tool("", "10초 앞으로 (→)", QStyle.StandardPixmap.SP_MediaSeekForward)
@@ -94,7 +96,10 @@ class ControlBar(QWidget):
         self.slider.hovered.connect(lambda frac, x: self.preview_hover.emit(frac * self._duration, x))
         self.slider.left.connect(self.preview_leave)
 
+        self.setObjectName("controls")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.lbl_time = QLabel("00:00 / 00:00")
+        self.lbl_time.setObjectName("time")
         self.lbl_time.setMinimumWidth(110)
         self.lbl_time.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -104,6 +109,7 @@ class ControlBar(QWidget):
         self.vol.setRange(0, 150)
         self.vol.setValue(100)
         self.vol.setFixedWidth(110)
+        self.vol.setObjectName("volume")
         self.vol.setToolTip("볼륨 (↑/↓, 휠)")
         self.vol.valueChanged.connect(self.volume_changed)
 
@@ -128,8 +134,8 @@ class ControlBar(QWidget):
         self.btn_full.clicked.connect(self.fullscreen_clicked)
 
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(8, 4, 8, 4)
-        lay.setSpacing(6)
+        lay.setContentsMargins(14, 8, 14, 8)
+        lay.setSpacing(8)
         for w in (self.btn_back, self.btn_play, self.btn_fwd):
             lay.addWidget(w)
         lay.addWidget(self.slider, 1)
@@ -174,8 +180,7 @@ class ControlBar(QWidget):
 
     def set_paused(self, paused: bool) -> None:
         self._paused = paused
-        icon = QStyle.StandardPixmap.SP_MediaPlay if paused else QStyle.StandardPixmap.SP_MediaPause
-        self.btn_play.setIcon(self.style().standardIcon(icon))
+        self.btn_play.setText("▶" if paused else "❚❚")
 
     def set_volume(self, v: int) -> None:
         self.vol.blockSignals(True)

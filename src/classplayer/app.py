@@ -22,6 +22,7 @@ from classplayer.player.mpv_widget import MpvWidget
 from classplayer.player.thumbnails import ThumbnailProvider
 from classplayer.player.controls import fmt_time
 from classplayer.settings import Settings
+from classplayer.ui.theme import QSS
 from classplayer.youtube.common import is_url, is_youtube_url, youtube_video_id
 from classplayer.youtube.download import PRESETS, DownloadJob, DownloadRequest
 from classplayer.youtube.probe import probe_spherical
@@ -305,32 +306,41 @@ class MainWindow(QMainWindow):
         self.controls.set_volume(self.settings.volume)
 
         # --- 링크 입력줄
+        logo = QLabel("▶")
+        logo.setObjectName("logo")
+        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.url_edit = QLineEdit()
-        self.url_edit.setPlaceholderText("유튜브 링크를 붙여넣거나 파일 경로를 입력하고 Enter")
+        self.url_edit.setObjectName("url")
+        self.url_edit.setPlaceholderText("유튜브 링크를 붙여넣거나 파일을 끌어다 놓으세요")
         self.url_edit.setClearButtonEnabled(True)
         self.url_edit.returnPressed.connect(self.play_from_url_bar)
         btn_paste = QPushButton("붙여넣고 재생")
+        btn_paste.setObjectName("primary")
         btn_paste.setToolTip("복사한 링크를 바로 재생 (⌘V)")
         btn_paste.clicked.connect(self.play_from_clipboard)
         btn_play = QPushButton("재생")
         btn_play.clicked.connect(self.play_from_url_bar)
         btn_dl = QPushButton("다운로드…")
         btn_dl.clicked.connect(self.open_download_dialog)
-        btn_open = QPushButton("파일 열기…")
+        btn_open = QPushButton("파일")
         btn_open.clicked.connect(self.open_file_dialog)
         for b in (btn_paste, btn_play, btn_dl, btn_open):
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         urlrow = QHBoxLayout()
-        urlrow.setContentsMargins(8, 6, 8, 2)
+        urlrow.setContentsMargins(14, 10, 14, 10)
+        urlrow.setSpacing(10)
+        urlrow.addWidget(logo)
         urlrow.addWidget(self.url_edit, 1)
         urlrow.addWidget(btn_paste)
         urlrow.addWidget(btn_play)
         urlrow.addWidget(btn_dl)
         urlrow.addWidget(btn_open)
         self.url_bar = QWidget()
+        self.url_bar.setObjectName("urlbar")
         self.url_bar.setLayout(urlrow)
 
         central = QWidget()
+        central.setObjectName("central")
         v = QVBoxLayout(central)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(0)
@@ -339,12 +349,20 @@ class MainWindow(QMainWindow):
         self.banner.play_clicked.connect(self._banner_play)
         self.banner.download_clicked.connect(self._banner_download)
         v.addWidget(self.banner)
-        v.addWidget(self.player, 1)
+        self.stage = QWidget()            # 영상 + (전체화면 때) 떠 있는 컨트롤바
+        self.stage.setStyleSheet("background: #000;")
+        sv = QVBoxLayout(self.stage)
+        sv.setContentsMargins(0, 0, 0, 0)
+        sv.addWidget(self.player)
+        self.stage.installEventFilter(self)
+        v.addWidget(self.stage, 1)
         v.addWidget(self.controls)
+        self._central_layout = v
         self.setCentralWidget(central)
 
         # --- 도크: 라이브러리, 다운로드
-        self.library = LibraryPanel(self.settings.library_folders, [self.settings.download_dir])
+        self.library = LibraryPanel(self.settings.library_folders, [self.settings.download_dir],
+                                    ffmpeg=self.ffmpeg, ffprobe=self.ffprobe)
         self.library.play_requested.connect(self.open_target)
         self.library.folders_changed.connect(lambda f: setattr(self.settings, "library_folders", f))
         self.dock_library = QDockWidget("라이브러리", self)
@@ -787,11 +805,13 @@ class MainWindow(QMainWindow):
             self.banner.hide()
             self.menuBar().hide()
             self.statusBar().hide()
+            self._set_controls_overlay(True)
             self.showFullScreen()
             self._fullscreen = True
             self._hide_timer.start()
         else:
             self._hide_timer.stop()
+            self._set_controls_overlay(False)
             self.showNormal()
             self.menuBar().show()
             self.statusBar().show()
@@ -801,6 +821,32 @@ class MainWindow(QMainWindow):
             self.dock_downloads.setVisible(self._dock_state.get("dl", False))
             self._fullscreen = False
             self.player.setCursor(Qt.CursorShape.OpenHandCursor if self.player.vr_enabled else Qt.CursorShape.ArrowCursor)
+
+    def _set_controls_overlay(self, on: bool) -> None:
+        """전체화면에서는 컨트롤바를 영상 위에 반투명하게 띄운다."""
+        c = self.controls
+        if on:
+            self._central_layout.removeWidget(c)
+            c.setParent(self.stage)
+            c.setProperty("overlay", True)
+            c.style().unpolish(c)
+            c.style().polish(c)
+            c.show()
+            c.raise_()
+            self._place_overlay()
+        else:
+            c.setProperty("overlay", False)
+            c.style().unpolish(c)
+            c.style().polish(c)
+            c.setParent(self.centralWidget())
+            self._central_layout.addWidget(c)
+            c.show()
+
+    def _place_overlay(self) -> None:
+        if self.controls.parent() is self.stage:
+            w = min(self.stage.width() - 40, 1100)
+            h = self.controls.sizeHint().height()
+            self.controls.setGeometry((self.stage.width() - w) // 2, self.stage.height() - h - 24, w, h)
 
     def _auto_hide_controls(self) -> None:
         if self._fullscreen and not self.controls.slider.isSliderDown() and not self.controls.underMouse():
@@ -817,6 +863,9 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ 단축키 (전역, 입력창 제외)
     def eventFilter(self, obj: QObject, e: QEvent) -> bool:
+        if obj is getattr(self, "stage", None) and e.type() == QEvent.Type.Resize:
+            self._place_overlay()
+            return False
         if e.type() == QEvent.Type.KeyPress and QApplication.activeWindow() is self:
             fw = QApplication.focusWidget()
             if isinstance(fw, (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox)) or \
@@ -926,6 +975,11 @@ def main() -> None:
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setOrganizationName("ClassPlayer")
+    app.setStyleSheet(QSS)
+    icon_path = (bootstrap.bundled_dir() or Path(__file__).resolve().parent) / "assets" / "icon.png"
+    if icon_path.exists():
+        from PySide6.QtGui import QIcon
+        app.setWindowIcon(QIcon(str(icon_path)))
     win = MainWindow()
     win.show()
     args = [a for a in sys.argv[1:] if not a.startswith("-psn_")]   # macOS 가 붙이는 프로세스 인자 제외

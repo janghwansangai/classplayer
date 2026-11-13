@@ -1,12 +1,16 @@
 """영상 라이브러리: 지정한 폴더를 훑어 목록을 만들고 검색한다."""
 from __future__ import annotations
 
+import hashlib
+import json
 import os
+import subprocess
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QObject, QSize, QStandardPaths, Qt, Signal
+from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
                                QToolButton, QVBoxLayout, QWidget)
 
@@ -59,19 +63,87 @@ def _human_size(n: int) -> str:
 
 class _ScanNotifier(QObject):
     done = Signal(object)
+    thumb = Signal(str, str, float)   # path, 썸네일 파일, 길이(초)
+
+
+def _fmt_dur(sec: float) -> str:
+    s = int(sec)
+    h, rem = divmod(s, 3600)
+    m, ss = divmod(rem, 60)
+    return f"{h}:{m:02d}:{ss:02d}" if h else f"{m:02d}:{ss:02d}"
+
+
+class LibraryThumbs:
+    """목록용 작은 썸네일과 길이를 ffmpeg/ffprobe 로 만들어 캐시한다."""
+
+    def __init__(self, ffmpeg: str | None, ffprobe: str | None) -> None:
+        self.ffmpeg, self.ffprobe = ffmpeg, ffprobe
+        base = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.CacheLocation) or "/tmp")
+        self.root = base / "libthumbs"
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def _key(self, path: str) -> str:
+        try:
+            mt = os.stat(path).st_mtime
+        except OSError:
+            mt = 0
+        return hashlib.sha1(f"{path}|{mt}".encode()).hexdigest()[:16]
+
+    def get(self, path: str) -> tuple[str, float] | None:
+        k = self.root / self._key(path)
+        meta = k.with_suffix(".json")
+        if meta.exists() and k.with_suffix(".jpg").exists():
+            try:
+                return str(k.with_suffix(".jpg")), float(json.loads(meta.read_text()).get("duration", 0))
+            except Exception:  # noqa: BLE001
+                return None
+        return None
+
+    def make(self, path: str) -> tuple[str, float] | None:
+        cached = self.get(path)
+        if cached:
+            return cached
+        if not self.ffmpeg:
+            return None
+        k = self.root / self._key(path)
+        dur = 0.0
+        if self.ffprobe:
+            try:
+                out = subprocess.run([self.ffprobe, "-v", "quiet", "-show_entries", "format=duration", "-of", "json", path],
+                                     capture_output=True, text=True, timeout=20, check=False).stdout
+                dur = float(json.loads(out or "{}").get("format", {}).get("duration") or 0)
+            except Exception:  # noqa: BLE001
+                dur = 0.0
+        ss = max(0.0, min(dur * 0.1, 30.0)) if dur else 1.0
+        try:
+            subprocess.run([self.ffmpeg, "-y", "-v", "error", "-ss", f"{ss:.2f}", "-i", path, "-frames:v", "1",
+                            "-vf", "scale=160:-2", "-q:v", "5", str(k.with_suffix(".jpg"))],
+                           capture_output=True, timeout=60, check=False)
+        except Exception:  # noqa: BLE001
+            return None
+        if not k.with_suffix(".jpg").exists():
+            return None
+        k.with_suffix(".json").write_text(json.dumps({"duration": dur}))
+        return str(k.with_suffix(".jpg")), dur
 
 
 class LibraryPanel(QWidget):
     play_requested = Signal(str)
     folders_changed = Signal(list)
 
-    def __init__(self, folders: list[str], extra_folders: list[str] | None = None, parent=None) -> None:
+    def __init__(self, folders: list[str], extra_folders: list[str] | None = None, parent=None,
+                 ffmpeg: str | None = None, ffprobe: str | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("library")
         self._folders = list(folders)
         self._extra = list(extra_folders or [])   # 다운로드 폴더처럼 항상 포함되는 폴더
         self._entries: list[Entry] = []
+        self._items: dict[str, QListWidgetItem] = {}
+        self._thumbs = LibraryThumbs(ffmpeg, ffprobe)
+        self._thumb_gen = 0
         self._notifier = _ScanNotifier()
         self._notifier.done.connect(self._on_scanned)
+        self._notifier.thumb.connect(self._on_thumb)
 
         self.search = QLineEdit()
         self.search.setPlaceholderText("영상 검색 (파일명, 폴더명)")
@@ -79,7 +151,8 @@ class LibraryPanel(QWidget):
         self.search.textChanged.connect(self._apply_filter)
 
         self.list = QListWidget()
-        self.list.setAlternatingRowColors(True)
+        self.list.setIconSize(QSize(80, 50))
+        self.list.setSpacing(1)
         self.list.itemActivated.connect(self._on_activated)
         self.list.itemDoubleClicked.connect(self._on_activated)
 
@@ -166,16 +239,55 @@ class LibraryPanel(QWidget):
     def _apply_filter(self, text: str) -> None:
         tokens = [t for t in text.lower().split() if t]
         self.list.clear()
+        self._items.clear()
         shown = 0
+        pending: list[str] = []
         for e in self._entries:
             hay = (e.name + " " + e.folder).lower()
             if all(t in hay for t in tokens):
-                item = QListWidgetItem(f"{e.name}\n{e.folder} · {_human_size(e.size)}")
+                item = QListWidgetItem(f"{Path(e.name).stem}\n{e.folder} · {_human_size(e.size)}")
                 item.setToolTip(e.path)
                 item.setData(Qt.ItemDataRole.UserRole, e.path)
+                cached = self._thumbs.get(e.path)
+                if cached:
+                    self._apply_thumb(item, e, cached[0], cached[1])
+                else:
+                    pending.append(e.path)
                 self.list.addItem(item)
+                self._items[e.path] = item
                 shown += 1
         self.lbl_count.setText(f"{shown}개 표시 / 전체 {len(self._entries)}개")
+        if pending:
+            self._start_thumbs(pending[:300])
+
+    def _apply_thumb(self, item: QListWidgetItem, e: Entry, jpg: str, dur: float) -> None:
+        pm = QPixmap(jpg)
+        if not pm.isNull():
+            item.setIcon(QIcon(pm))
+        tail = f"{_fmt_dur(dur)} · " if dur else ""
+        item.setText(f"{Path(e.name).stem}\n{tail}{e.folder} · {_human_size(e.size)}")
+
+    def _start_thumbs(self, paths: list[str]) -> None:
+        self._thumb_gen += 1
+        gen = self._thumb_gen
+
+        def work() -> None:
+            for p in paths:
+                if gen != self._thumb_gen:
+                    return
+                r = self._thumbs.make(p)
+                if r:
+                    self._notifier.thumb.emit(p, r[0], r[1])
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_thumb(self, path: str, jpg: str, dur: float) -> None:
+        item = self._items.get(path)
+        if item is None:
+            return
+        e = next((x for x in self._entries if x.path == path), None)
+        if e:
+            self._apply_thumb(item, e, jpg, dur)
 
     def _on_activated(self, item: QListWidgetItem) -> None:
         path = item.data(Qt.ItemDataRole.UserRole)

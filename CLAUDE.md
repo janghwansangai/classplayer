@@ -13,3 +13,5 @@
 - 테스트: `CLASSPLAYER_TEST_MAX_HEIGHT=1080 uv run python tests/perf.py <유튜브링크> /tmp/out 24` 로 스트리밍 드롭 측정.
 - 패키징: `./packaging/build_mac.sh` → `dist/ClassPlayer.app` (+zip). spec은 `packaging/classplayer.spec`. 번들에는 libmpv(+libav 의존성), ffmpeg, ffprobe, deno가 들어간다. 자가 점검은 `CLASSPLAYER_SELFTEST=<파일|링크>` 환경변수로 앱을 띄우면 6초 뒤 JSON 한 줄 출력 후 종료. 번들 실행 시 bootstrap이 Homebrew 경로를 제외하고, build 스크립트가 `libmpv.dylib` 링크를 만든다(python-mpv가 그 이름으로 찾음).
 - 윈도우 빌드: `packaging/build_windows.bat` (미검증).
+- 디자인: 시안 A(밝은 교실형) 채택, QSS는 `ui/theme.py`. 전체화면에서는 컨트롤바를 stage 위 오버레이(property overlay=true, 어두운 유리)로 재부모화. 아이콘은 `packaging/icon.svg` → `packaging/make_icon.py`로 png/ico/icns 생성.
+- 라이브러리 목록 썸네일/길이: `library/library.py`의 LibraryThumbs(ffmpeg/ffprobe, 캐시). 탐색 미리보기: `player/thumbnails.py`(로컬 ffmpeg 키프레임, 유튜브 스토리보드).
