@@ -43,18 +43,22 @@ QWidget#library QComboBox {{ border: 1px solid {LINE}; border-radius: 8px; paddi
 
 /* 하단 컨트롤 */
 QWidget#controls {{ background: #ffffff; border-top: 1px solid {LINE}; }}
-QWidget#controls[overlay="true"] {{ background: rgba(18,18,22,0.82); border: 1px solid rgba(255,255,255,0.25); border-radius: 16px; }}
+QWidget#controls[overlay="true"] {{ background: #121216; border: none; border-top: 1px solid #2a2b31; }}
 QWidget#controls[overlay="true"] QToolButton {{ color: #f3f4f6; }}
 QWidget#controls[overlay="true"] QToolButton#play {{ background: {BLUE}; color: #ffffff; }}
 QWidget#controls[overlay="true"] QToolButton:hover {{ background: rgba(255,255,255,0.15); }}
 QWidget#controls[overlay="true"] QLabel#time {{ color: #e5e7eb; }}
-QWidget#controls[overlay="true"] QComboBox {{ background: rgba(255,255,255,0.12); color: #f3f4f6; border-color: rgba(255,255,255,0.25); }}
+QWidget#controls[overlay="true"] QComboBox {{ background: #2a2b31; color: #f3f4f6; border: 1px solid rgba(255,255,255,0.35); }}
+QWidget#controls[overlay="true"] QComboBox::drop-down {{ border: none; }}
+QWidget#controls[overlay="true"] QComboBox QAbstractItemView {{ background: #1f2026; color: #f3f4f6; border: 1px solid rgba(255,255,255,0.25); selection-background-color: {BLUE}; selection-color: #ffffff; outline: none; }}
+QWidget#controls[overlay="true"] QToolButton:checked {{ background: rgba(37,99,235,0.45); color: #ffffff; }}
 QWidget#controls QToolButton {{ border: none; border-radius: 8px; min-width: 34px; min-height: 34px; background: transparent; color: #374151; }}
 QWidget#controls QToolButton:hover {{ background: #f3f4f6; }}
 QWidget#controls QToolButton:checked {{ background: #dbeafe; color: {BLUE}; }}
 QToolButton#play {{ background: {BLUE}; color: #ffffff; font-size: 16px; font-weight: 700; border-radius: 20px; min-width: 40px; min-height: 40px; max-width: 40px; max-height: 40px; }}
 QToolButton#play:hover {{ background: {BLUE_DARK}; }}
-QWidget#controls QComboBox {{ border: 1px solid {LINE}; border-radius: 8px; padding: 0 6px; min-height: 28px; background: #ffffff; }}
+QWidget#controls QComboBox {{ border: 1px solid {LINE}; border-radius: 8px; padding: 0 6px; min-height: 28px; background: #ffffff; color: {TEXT}; }}
+QWidget#controls QComboBox QAbstractItemView {{ background: #ffffff; color: {TEXT}; selection-background-color: #dbeafe; selection-color: {TEXT}; }}
 QLabel#time {{ color: {MUTED}; font-variant-numeric: tabular-nums; }}
 
 QSlider::groove:horizontal {{ height: 6px; border-radius: 3px; background: {LINE}; }}

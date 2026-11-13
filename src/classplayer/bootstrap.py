@@ -9,7 +9,7 @@ from pathlib import Path
 APP_NAME = "ClassPlayer"
 VIDEO_EXTENSIONS = {
     ".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v", ".ts", ".m2ts", ".mts",
-    ".wmv", ".flv", ".mpg", ".mpeg", ".3gp", ".ogv", ".vob", ".mxf", ".hevc", ".h265", ".insv", ".insp",
+    ".wmv", ".flv", ".mpg", ".mpeg", ".3gp", ".ogv", ".vob", ".mxf", ".hevc", ".h265", ".insv", ".insp", ".osv", ".lrf", ".lrv",
 }
 
 
@@ -73,3 +73,26 @@ def find_tool(name: str) -> str | None:
         if (Path(p) / exe).exists():
             return str(Path(p) / exe)
     return None
+
+
+def is_cloud_placeholder(path: str) -> bool:
+    """구글 드라이브·아이클라우드·원드라이브처럼 '자리만 있고 내용은 아직 안 받은' 파일인지.
+
+    이런 파일을 바로 열면 재생하면서 내려받기 때문에 자주 멈춘다.
+    """
+    try:
+        st = os.stat(path)
+    except OSError:
+        return False
+    if st.st_size < (8 << 20):
+        return False
+    if sys.platform == "darwin":
+        # SF_DATALESS(0x40000000): 내용이 클라우드에만 있음
+        if getattr(st, "st_flags", 0) & 0x40000000:
+            return True
+        return getattr(st, "st_blocks", 0) * 512 < st.st_size * 0.5
+    if sys.platform.startswith("win"):
+        attrs = getattr(st, "st_file_attributes", 0)
+        # FILE_ATTRIBUTE_OFFLINE, RECALL_ON_DATA_ACCESS, RECALL_ON_OPEN
+        return bool(attrs & (0x1000 | 0x400000 | 0x40000))
+    return False

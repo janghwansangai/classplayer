@@ -18,3 +18,7 @@
 - 듀얼 피쉬아이(insv) 투영: 셰이더 u_projection=2, FFmpeg dfisheye 규약(왼쪽 원=뒤, 오른쪽 원=앞)을 기본으로 하고 메뉴에서 좌우 바꾸기/화각 조절. 2026-11-13 합성 영상으로 6방향 검증.
 - 안내: MainWindow.notify()가 토스트+상태줄, _show_loading()이 영상 위 로딩 문구(paused-for-cache 관찰로 버퍼링 표시). 윈도우 기본 플레이어 등록은 platform_win.py(HKCU 레지스트리).
 - app.setStyle('Fusion')으로 맥/윈도우 모양 통일 (윈도우 기본 스타일에서 QSS 일부가 안 먹던 문제).
+- Insta360 X4/X5 insv: 렌즈별 영상 스트림 2개(각 정사각형) → probe가 dual_stream 표시, MpvWidget.set_dual_stream()이 lavfi-complex `[vid2][vid1]hstack`으로 합쳐 듀얼 피쉬아이로 재생(실측: 스트림0=바깥 풍경 렌즈=오른쪽/앞, 스트림1=화면 쪽). 필터 경로라 hwdec은 auto-copy-safe. 합성 2스트림 파일 `tests/assets/test_360_dual.insv`로 6방향 검증.
+- DJI Osmo/Avata 360 `.osv`(원본)·`.lrf`(프록시): 두 원이 나란한 2:1 듀얼 피쉬아이, 확장자로 감지.
+- 구글 드라이브 등 '자리만 있는' 클라우드 파일: bootstrap.is_cloud_placeholder()(맥 SF_DATALESS, 윈도우 OFFLINE/RECALL 속성)로 감지 → 열 때 "내려받고 재생/그냥 재생" 묻고, 라이브러리 썸네일은 건너뜀(안 그러면 폴더 전체를 내려받음).
+- 전체화면 컨트롤바: 맥에서 QOpenGLWidget 위에 자식 위젯을 겹치면 흐릿하게 합성되는 문제(배속 글자 안 보임)가 있어 2026-11-14부터 영상 아래 어두운 띠(레이아웃 안)로 두고 자동 숨김만 한다. 겹치기 모드는 CLASSPLAYER_FS_OVERLAY=1. paintGL 끝에 _restore_gl_state()로 mpv가 바꾼 GL 상태를 되돌린다.

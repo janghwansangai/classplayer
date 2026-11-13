@@ -174,6 +174,7 @@ class MpvWidget(QOpenGLWidget):
     def play(self, target: str) -> None:
         """로컬 파일이나 일반 URL 재생 (mpv 내장 ytdl 훅 사용)."""
         self._reset_stream_options()
+        self.set_dual_stream(False)
         self.mpv.play(target)
         self.mpv.pause = False
         self.pause_changed.emit(False)
@@ -193,6 +194,29 @@ class MpvWidget(QOpenGLWidget):
         self.mpv.play(video_url)
         self.mpv.pause = False
         self.pause_changed.emit(False)
+
+    DUAL_STREAM_FILTER = "[vid2][vid1]hstack[vo]"
+
+    def set_dual_stream(self, on: bool, swap: bool = False) -> None:
+        """렌즈별 영상 스트림이 2개인 파일(Insta360 X4 insv 등)을 가로로 붙여 듀얼 피쉬아이 한 장으로 만든다.
+
+        Insta360 X4 실측: 1번 스트림이 화면 반대쪽(바깥 풍경) 렌즈라 오른쪽(앞)에, 2번(화면 쪽) 렌즈를 왼쪽(뒤)에 둔다. 필터를 거치려면 복사형 하드웨어 디코딩이 필요하다.
+        """
+        want = ("[vid1][vid2]hstack[vo]" if swap else self.DUAL_STREAM_FILTER) if on else ""
+        try:
+            if (self.mpv["lavfi-complex"] or "") == want:
+                return
+            self.mpv["hwdec"] = "auto-copy-safe" if on else "auto-safe"
+            self.mpv["lavfi-complex"] = want
+        except Exception as e:  # noqa: BLE001
+            self.log_message.emit("warn", "vr", f"두 렌즈 스트림 합치기 실패: {e}")
+
+    @property
+    def dual_stream(self) -> bool:
+        try:
+            return bool(self.mpv["lavfi-complex"])
+        except Exception:  # noqa: BLE001
+            return False
 
     def _reset_stream_options(self) -> None:
         self._pending_subs = []
@@ -391,6 +415,35 @@ class MpvWidget(QOpenGLWidget):
             self._draw_vr(target, w, h, tw, th)
         else:
             self.ctx.render(flip_y=True, opengl_fbo={"fbo": target, "w": w, "h": h})
+        self._restore_gl_state(target)
+
+    @staticmethod
+    def _restore_gl_state(target: int) -> None:
+        """mpv가 바꿔 둔 GL 상태를 되돌린다.
+
+        그대로 두면 Qt가 이 위젯 위에 겹친 일반 위젯(전체화면 컨트롤바 등)을 합성할 때
+        블렌딩·sRGB 설정이 꼬여 글자와 색이 흐릿하게 나온다.
+        """
+        try:
+            GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, target)
+            GL.glUseProgram(0)
+            GL.glBindVertexArray(0)
+            GL.glActiveTexture(GL.GL_TEXTURE0)
+            GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
+            GL.glDisable(GL.GL_DEPTH_TEST)
+            GL.glDisable(GL.GL_SCISSOR_TEST)
+            GL.glDisable(GL.GL_CULL_FACE)
+            GL.glDisable(GL.GL_STENCIL_TEST)
+            GL.glDisable(GL.GL_FRAMEBUFFER_SRGB)
+            GL.glColorMask(GL.GL_TRUE, GL.GL_TRUE, GL.GL_TRUE, GL.GL_TRUE)
+            GL.glDepthMask(GL.GL_TRUE)
+            GL.glDisable(GL.GL_BLEND)
+            GL.glBlendFuncSeparate(GL.GL_ONE, GL.GL_ONE_MINUS_SRC_ALPHA, GL.GL_ONE, GL.GL_ONE_MINUS_SRC_ALPHA)
+            GL.glBlendEquation(GL.GL_FUNC_ADD)
+            GL.glPixelStorei(GL.GL_UNPACK_ALIGNMENT, 4)
+            GL.glPixelStorei(GL.GL_UNPACK_ROW_LENGTH, 0)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _draw_vr(self, target: int, w: int, h: int, tw: int, th: int) -> None:
         v = self.vr

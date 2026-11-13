@@ -14,7 +14,7 @@ from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
                                QToolButton, QVBoxLayout, QWidget)
 
-from classplayer.bootstrap import VIDEO_EXTENSIONS
+from classplayer.bootstrap import is_cloud_placeholder, VIDEO_EXTENSIONS
 
 
 @dataclass
@@ -103,7 +103,7 @@ class LibraryThumbs:
         cached = self.get(path)
         if cached:
             return cached
-        if not self.ffmpeg:
+        if not self.ffmpeg or is_cloud_placeholder(path):
             return None
         k = self.root / self._key(path)
         dur = 0.0

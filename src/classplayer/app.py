@@ -201,6 +201,11 @@ class _ProbeNotifier(QObject):
     result = Signal(str, object)
 
 
+class _CopyNotifier(QObject):
+    progress = Signal(int)
+    finished = Signal(str, str)
+
+
 class SeekPreview(QFrame):
     """슬라이더 위에 뜨는 썸네일 + 시간 말풍선."""
 
@@ -340,6 +345,9 @@ class MainWindow(QMainWindow):
         self._fullscreen = False
         self._dock_state: dict[str, bool] = {}
         self._probe = _ProbeNotifier()
+        self._copy_sig = _CopyNotifier()
+        self._copy_sig.progress.connect(self._on_copy_progress)
+        self._copy_sig.finished.connect(self._on_copy_finished)
         self._probe.result.connect(self._on_probe_result)
 
         # --- 플레이어
@@ -653,11 +661,82 @@ class MainWindow(QMainWindow):
             self.resolver.resolve(target)
         else:
             self.resolver.cancel()
+            if bootstrap.is_cloud_placeholder(target) and not self._ask_cloud_file(target):
+                return
             self.lbl_title.setText("여는 중…")
             self._show_loading("여는 중…")
             self.player.play(target)
             self._probe_local(target)
         self.player.setFocus()
+
+    # ------------------------------------------------------------------ 클라우드(구글 드라이브 등) 파일
+    def _ask_cloud_file(self, path: str) -> bool:
+        """아직 내려받지 않은 드라이브 파일: 먼저 내려받을지 묻는다. True면 그냥 재생."""
+        size_gb = os.path.getsize(path) / (1 << 30)
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("드라이브 파일")
+        box.setText(f"이 파일은 아직 이 컴퓨터에 내려받지 않은 드라이브 파일입니다 ({size_gb:.1f} GB).")
+        box.setInformativeText("그대로 재생하면 드라이브에서 받아 오면서 틀기 때문에 자주 멈추고 탐색이 느립니다.\n"
+                               "수업 전에 미리 내려받아 두는 것을 권합니다 (다운로드 폴더에 복사됩니다).")
+        b_dl = box.addButton("내려받고 재생", QMessageBox.ButtonRole.AcceptRole)
+        b_play = box.addButton("그냥 재생", QMessageBox.ButtonRole.ActionRole)
+        box.addButton("취소", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(b_dl)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is b_dl:
+            self._copy_cloud_file(path)
+            return False
+        return clicked is b_play
+
+    def _copy_cloud_file(self, src: str) -> None:
+        dst_dir = Path(self.settings.download_dir)
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        dst = dst_dir / Path(src).name
+        if dst.exists() and dst.stat().st_size == os.path.getsize(src) and not bootstrap.is_cloud_placeholder(str(dst)):
+            self.open_target(str(dst))
+            return
+        self._current = ""
+        self.lbl_title.setText("드라이브에서 내려받는 중…")
+        self._show_loading("드라이브에서 내려받는 중… 0%")
+        total = max(1, os.path.getsize(src))
+        tmp = dst.with_suffix(dst.suffix + ".part")
+
+        def work() -> None:
+            try:
+                done = 0
+                with open(src, "rb") as fi, open(tmp, "wb") as fo:
+                    while True:
+                        chunk = fi.read(8 << 20)
+                        if not chunk:
+                            break
+                        fo.write(chunk)
+                        done += len(chunk)
+                        self._copy_sig.progress.emit(done * 100 // total)
+                os.replace(tmp, dst)
+                self._copy_sig.finished.emit(str(dst), "")
+            except Exception as e:  # noqa: BLE001
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                self._copy_sig.finished.emit("", str(e))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_copy_progress(self, pct: int) -> None:
+        self._show_loading(f"드라이브에서 내려받는 중… {pct}%")
+        self.statusBar().showMessage(f"드라이브에서 내려받는 중… {pct}%")
+
+    def _on_copy_finished(self, dst: str, err: str) -> None:
+        self.loading.hide()
+        if err or not dst:
+            self.notify(f"내려받기 실패: {err}", 8000)
+            return
+        self.notify("내려받기 완료. 라이브러리 다운로드 폴더에 저장했습니다", 5000)
+        self.library.rescan()
+        self.open_target(dst)
 
     def _on_stream_resolved(self, rs) -> None:
         if rs.url != self._current:
@@ -696,9 +775,14 @@ class MainWindow(QMainWindow):
     def _on_probe_result(self, path: str, info: object) -> None:
         if path != self._current:
             return
+        if getattr(info, "dual_stream", False):
+            self._show_loading("두 렌즈 영상을 합치는 중…")
+            self.player.set_dual_stream(True)
         if getattr(info, "is_spherical", False):
             self.set_vr(True, projection=info.projection, stereo=info.stereo)  # type: ignore[union-attr]
             self.statusBar().showMessage("360도 영상으로 감지되어 360도 모드를 켰습니다 (3 키로 끄기)", 6000)
+        elif path.lower().endswith((".insv", ".insp")) and getattr(info, "video_streams", 1) == 1:
+            self.notify("이 insv 파일에는 렌즈 하나의 영상만 들어 있습니다. 짝이 되는 _10_ 파일과 함께 Insta360 Studio로 합쳐 주세요", 9000)
 
     def _show_loading(self, text: str) -> None:
         self.loading.setText(text)
@@ -1012,24 +1096,27 @@ class MainWindow(QMainWindow):
             self.player.setCursor(Qt.CursorShape.OpenHandCursor if self.player.vr_enabled else Qt.CursorShape.ArrowCursor)
 
     def _set_controls_overlay(self, on: bool) -> None:
-        """전체화면에서는 컨트롤바를 영상 위에 반투명하게 띄운다."""
+        """전체화면용 컨트롤바 모양 전환.
+
+        맥에서 OpenGL 영상 위젯 위에 자식 위젯을 겹쳐 올리면 글자·색이 흐릿하게 합성되는 문제가 있어
+        (배속 글자가 안 보임), 전체화면에서도 영상 아래 어두운 띠로 두고 자동 숨김 때만 사라지게 한다.
+        CLASSPLAYER_FS_OVERLAY=1 이면 예전처럼 영상 위에 겹친다.
+        """
         c = self.controls
+        c.setProperty("overlay", on)
+        if os.environ.get("CLASSPLAYER_FS_OVERLAY") == "1":
+            if on:
+                self._central_layout.removeWidget(c)
+                c.setParent(self.stage)
+            else:
+                c.setParent(self.centralWidget())
+                self._central_layout.addWidget(c)
+        c.style().unpolish(c)
+        c.style().polish(c)
+        c.show()
         if on:
-            self._central_layout.removeWidget(c)
-            c.setParent(self.stage)
-            c.setProperty("overlay", True)
-            c.style().unpolish(c)
-            c.style().polish(c)
-            c.show()
             c.raise_()
             self._place_overlay()
-        else:
-            c.setProperty("overlay", False)
-            c.style().unpolish(c)
-            c.style().polish(c)
-            c.setParent(self.centralWidget())
-            self._central_layout.addWidget(c)
-            c.show()
 
     def _place_overlay(self) -> None:
         if self.controls.parent() is self.stage:
@@ -1053,7 +1140,7 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ 단축키 (전역, 입력창 제외)
     def eventFilter(self, obj: QObject, e: QEvent) -> bool:
-        if obj is getattr(self, "stage", None) and e.type() == QEvent.Type.Resize:
+        if obj is getattr(self, "stage", None) and e.type() in (QEvent.Type.Resize, QEvent.Type.Move):
             self._place_overlay()
             if self.loading.isVisible():
                 self.loading.move((self.stage.width() - self.loading.width()) // 2,
