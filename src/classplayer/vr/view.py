@@ -8,7 +8,7 @@ FOV_MIN = math.radians(15.0)
 FOV_MAX = math.radians(140.0)
 PITCH_LIMIT = math.radians(89.0)
 
-PROJECTIONS = ("equirect", "eac")
+PROJECTIONS = ("equirect", "eac", "dfisheye")
 STEREO_MODES = ("mono", "tb", "sbs")
 
 
@@ -21,6 +21,8 @@ class VrView:
     stereo: str = "mono"
     hq: bool = True
     max_magnification: float = 3.0
+    fisheye_fov_deg: float = 190.0
+    fisheye_swap: bool = False
     # 아래는 렌더러가 매 프레임 채워 넣는 값
     magnification: float = field(default=1.0, compare=False)
 
@@ -41,6 +43,9 @@ class VrView:
         if self.projection == "eac":
             # 큐브맵 한 면(90도)이 폭의 1/3 → 360도는 폭의 4/3에 해당
             w *= 4.0 / 3.0
+        elif self.projection == "dfisheye":
+            # 원 하나(폭의 1/2)가 렌즈 화각을 담는다
+            w *= 360.0 / max(120.0, self.fisheye_fov_deg)
         return w
 
     def min_fov_for(self, view_w_px: int, tex_w: int) -> float:
@@ -67,5 +72,5 @@ class VrView:
     def describe(self) -> str:
         return (f"360° 시야각 {math.degrees(self.fov):.0f}° · "
                 f"확대 {self.magnification:.1f}× (원본 1픽셀 기준) · "
-                f"{'EAC' if self.projection == 'eac' else '등장방형'}"
+                f"{ {'eac': 'EAC', 'dfisheye': '듀얼 피쉬아이'}.get(self.projection, '등장방형') }"
                 + ("" if self.stereo == "mono" else f" · {self.stereo.upper()}"))

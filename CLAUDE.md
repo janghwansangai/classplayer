@@ -15,3 +15,6 @@
 - 윈도우 빌드: `packaging/build_windows.bat` (미검증).
 - 디자인: 시안 A(밝은 교실형) 채택, QSS는 `ui/theme.py`. 전체화면에서는 컨트롤바를 stage 위 오버레이(property overlay=true, 어두운 유리)로 재부모화. 아이콘은 `packaging/icon.svg` → `packaging/make_icon.py`로 png/ico/icns 생성.
 - 라이브러리 목록 썸네일/길이: `library/library.py`의 LibraryThumbs(ffmpeg/ffprobe, 캐시). 탐색 미리보기: `player/thumbnails.py`(로컬 ffmpeg 키프레임, 유튜브 스토리보드).
+- 듀얼 피쉬아이(insv) 투영: 셰이더 u_projection=2, FFmpeg dfisheye 규약(왼쪽 원=뒤, 오른쪽 원=앞)을 기본으로 하고 메뉴에서 좌우 바꾸기/화각 조절. 2026-11-13 합성 영상으로 6방향 검증.
+- 안내: MainWindow.notify()가 토스트+상태줄, _show_loading()이 영상 위 로딩 문구(paused-for-cache 관찰로 버퍼링 표시). 윈도우 기본 플레이어 등록은 platform_win.py(HKCU 레지스트리).
+- app.setStyle('Fusion')으로 맥/윈도우 모양 통일 (윈도우 기본 스타일에서 QSS 일부가 안 먹던 문제).

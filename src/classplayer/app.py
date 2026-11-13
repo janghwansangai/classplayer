@@ -238,6 +238,53 @@ class SeekPreview(QFrame):
             self.show()
 
 
+class Toast(QFrame):
+    """영상 위 상단 중앙에 잠깐 뜨는 안내. 버튼 하나를 붙일 수 있다."""
+
+    def __init__(self, parent) -> None:
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet("Toast { background: rgba(17,24,39,0.92); border-radius: 10px; }")
+        self.label = QLabel("")
+        self.label.setStyleSheet("color: white; font-size: 14px;")
+        self.btn = QPushButton("")
+        self.btn.setObjectName("toastbtn")
+        self.btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn.hide()
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(16, 10, 16, 10)
+        lay.setSpacing(12)
+        lay.addWidget(self.label)
+        lay.addWidget(self.btn)
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self.hide)
+        self._cb = None
+        self.btn.clicked.connect(self._on_btn)
+        self.hide()
+
+    def _on_btn(self) -> None:
+        if self._cb:
+            self._cb()
+        self.hide()
+
+    def show_message(self, text: str, msec: int = 3500, button: str = "", callback=None) -> None:
+        self.label.setText(text)
+        self._cb = callback
+        if button:
+            self.btn.setText(button)
+            self.btn.show()
+        else:
+            self.btn.hide()
+        self.adjustSize()
+        par = self.parentWidget()
+        if par:
+            self.move((par.width() - self.width()) // 2, 24)
+        self.show()
+        self.raise_()
+        self._timer.start(msec)
+
+
 class ClipboardBanner(QFrame):
     """클립보드에 유튜브 링크가 있을 때 위쪽에 뜨는 한 줄 안내."""
 
@@ -302,6 +349,11 @@ class MainWindow(QMainWindow):
             vr_hq=self.settings.vr_hq, vr_max_magnification=self.settings.vr_max_magnification,
         )
         self.player.set_volume(self.settings.volume)
+        if self.settings.audio_device and self.settings.audio_device != "auto":
+            try:
+                self.player.mpv["audio-device"] = self.settings.audio_device
+            except Exception:  # noqa: BLE001
+                pass
         self.controls = ControlBar()
         self.controls.set_volume(self.settings.volume)
 
@@ -355,6 +407,12 @@ class MainWindow(QMainWindow):
         sv.setContentsMargins(0, 0, 0, 0)
         sv.addWidget(self.player)
         self.stage.installEventFilter(self)
+        self.toast = Toast(self.stage)
+        self.loading = QLabel("", self.stage)
+        self.loading.setObjectName("loading")
+        self.loading.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.loading.hide()
+        self._audio_only = False
         v.addWidget(self.stage, 1)
         v.addWidget(self.controls)
         self._central_layout = v
@@ -447,6 +505,8 @@ class MainWindow(QMainWindow):
         p.mouse_moved.connect(self._on_mouse_moved)
         p.wheel_scrolled.connect(lambda d: self._nudge_volume(5 * d))
         p.vr_changed.connect(self._on_vr_changed)
+        p.buffering_changed.connect(self._on_buffering)
+        self.resolver.started.connect(lambda _u: self._show_loading("유튜브에서 영상 정보를 가져오는 중…\n보통 5~15초 걸립니다"))
 
         c.play_clicked.connect(p.toggle_pause)
         c.relative_seek.connect(p.seek_relative)
@@ -454,7 +514,7 @@ class MainWindow(QMainWindow):
         c.volume_changed.connect(self._set_volume)
         c.mute_clicked.connect(p.toggle_mute)
         c.speed_changed.connect(p.set_speed)
-        c.subs_clicked.connect(p.cycle_subtitles)
+        c.subs_clicked.connect(self.cycle_subtitles)
         c.vr_toggled.connect(self.set_vr)
         c.vr_reset_clicked.connect(p.vr_reset)
         c.fullscreen_clicked.connect(self.toggle_fullscreen)
@@ -493,6 +553,7 @@ class MainWindow(QMainWindow):
         act(m_play, "오디오 트랙 전환", self.player.cycle_audio)
         act(m_play, "화면 캡처", self.take_screenshot)
         self.a_sponsor = act(m_play, "협찬 구간 자동 건너뛰기 (SponsorBlock)", self._toggle_sponsor, checkable=True, checked=True)
+        self.a_audio_only = act(m_play, "소리만 재생 (영상 끄기)", self.toggle_audio_only, "Ctrl+B", checkable=True)
 
         m_view = mb.addMenu("보기")
         act(m_view, "전체화면", self.toggle_fullscreen, "Ctrl+F")
@@ -501,10 +562,17 @@ class MainWindow(QMainWindow):
         m_proj = m_view.addMenu("360도 투영 방식")
         g = QActionGroup(self)
         self.a_proj = {}
-        for key, label in (("equirect", "등장방형 (일반 360도 파일)"), ("eac", "유튜브 EAC 큐브맵")):
+        for key, label in (("equirect", "등장방형 (일반 360도 파일)"), ("eac", "유튜브 EAC 큐브맵"),
+                           ("dfisheye", "듀얼 피쉬아이 (Insta360 원본 insv)")):
             a = act(m_proj, label, lambda _c, k=key: self._set_projection(k), checkable=True, checked=(key == "equirect"))
             g.addAction(a)
             self.a_proj[key] = a
+        m_fe = m_view.addMenu("듀얼 피쉬아이 설정")
+        g_fe = QActionGroup(self)
+        for fov in (180.0, 190.0, 200.0, 210.0):
+            a = act(m_fe, f"렌즈 화각 {fov:g}°", lambda _c, f=fov: self._set_fisheye(fov=f), checkable=True, checked=(fov == 190.0))
+            g_fe.addAction(a)
+        act(m_fe, "앞/뒤 렌즈 좌우 바꾸기", lambda on: self._set_fisheye(swap=on), checkable=True)
         m_stereo = m_view.addMenu("입체(3D) 배치")
         g2 = QActionGroup(self)
         self.a_stereo = {}
@@ -535,6 +603,11 @@ class MainWindow(QMainWindow):
                     checked=(h == self.settings.stream_max_height))
             g4.addAction(a)
         act(m_set, "다운로드 폴더 변경…", self._change_download_dir)
+        act(m_set, "캡처 저장 폴더 변경…", self._change_capture_dir)
+        self.m_audio = m_set.addMenu("소리 출력 장치")
+        self.m_audio.aboutToShow.connect(self._fill_audio_devices)
+        m_set.addSeparator()
+        act(m_set, "기본 영상 플레이어로 등록…", self.register_default_player)
 
         m_help = mb.addMenu("도움말")
         act(m_help, "단축키", lambda: QMessageBox.information(self, "단축키", f"<pre>{HELP_TEXT}</pre>"))
@@ -572,20 +645,25 @@ class MainWindow(QMainWindow):
         self.settings.add_recent(target)
         if self._current_is_youtube:
             self.lbl_title.setText("유튜브 정보 가져오는 중…")
-            self.statusBar().showMessage("유튜브에서 영상 주소를 가져오는 중…")
+            self.resolver.resolve(target)
+        elif is_url(target):
+            # 구글 드라이브, 비메오 등: yt-dlp 가 아는 주소면 앱 안에서 풀고, 모르면 mpv 가 직접 연다
+            self.lbl_title.setText("영상 정보 가져오는 중…")
+            self._show_loading("영상 주소를 확인하는 중…")
             self.resolver.resolve(target)
         else:
             self.resolver.cancel()
             self.lbl_title.setText("여는 중…")
+            self._show_loading("여는 중…")
             self.player.play(target)
-            if not is_url(target):
-                self._probe_local(target)
+            self._probe_local(target)
         self.player.setFocus()
 
     def _on_stream_resolved(self, rs) -> None:
         if rs.url != self._current:
             return
         self.statusBar().clearMessage()
+        self._show_loading("영상을 불러오는 중…")
         self.player.play_stream(rs.video_url, rs.audio_url, title=rs.title, user_agent=rs.user_agent,
                                 subtitles=rs.subtitles)
         self._on_title(rs.title)
@@ -598,8 +676,10 @@ class MainWindow(QMainWindow):
     def _on_stream_failed(self, url: str, message: str) -> None:
         if url != self._current:
             return
-        # 앱 내부 풀기에 실패하면 mpv 내장 훅으로 한 번 더 시도한다
-        self.statusBar().showMessage(f"직접 풀기 실패({message}), mpv 내장 방식으로 다시 시도합니다", 8000)
+        # 앱 내부 풀기에 실패하면 mpv 가 직접 연다 (일반 영상 주소, 내장 ytdl 훅)
+        if self._current_is_youtube:
+            self.notify(f"유튜브 주소를 풀지 못했습니다 ({message}). 다른 방식으로 다시 시도합니다", 8000)
+        self._show_loading("영상을 여는 중…")
         self.player.play(url)
         vid = youtube_video_id(url)
         if vid and self.a_sponsor.isChecked():
@@ -620,8 +700,28 @@ class MainWindow(QMainWindow):
             self.set_vr(True, projection=info.projection, stereo=info.stereo)  # type: ignore[union-attr]
             self.statusBar().showMessage("360도 영상으로 감지되어 360도 모드를 켰습니다 (3 키로 끄기)", 6000)
 
+    def _show_loading(self, text: str) -> None:
+        self.loading.setText(text)
+        self.loading.adjustSize()
+        self.loading.move((self.stage.width() - self.loading.width()) // 2, (self.stage.height() - self.loading.height()) // 2)
+        self.loading.show()
+        self.loading.raise_()
+
+    def _on_buffering(self, on: bool) -> None:
+        if on and self._current:
+            self._show_loading("버퍼링 중… 잠시 기다려 주세요")
+        elif self.loading.isVisible() and not on:
+            self.loading.hide()
+
+    def notify(self, text: str, msec: int = 3500, button: str = "", callback=None) -> None:
+        self.toast.show_message(text, msec, button, callback)
+        self.statusBar().showMessage(text, msec)
+
     def _on_file_loaded(self, path: str) -> None:
+        self.loading.hide()
         self._update_info()
+        if self._audio_only:
+            self.player.mpv["vid"] = "no"
         self.player.add_pending_subtitles()
         if self._current and not is_url(self._current):
             dur = float(self.player.property("duration", 0.0) or 0.0)
@@ -739,9 +839,21 @@ class MainWindow(QMainWindow):
         for k, a in self.a_stereo.items():
             a.setChecked(k == self.player.vr.stereo)
         self.lbl_vr.setText(self.player.vr.describe() if on else "")
+        if on:
+            self.notify("360도 모드: 드래그로 둘러보고 휠로 확대합니다 (3 키로 끔)")
+        elif self.sender() is not None or not self._current:
+            pass
 
     def _set_projection(self, key: str) -> None:
         self.player.set_vr_enabled(self.player.vr_enabled, projection=key)
+        self.lbl_vr.setText(self.player.vr.describe() if self.player.vr_enabled else "")
+
+    def _set_fisheye(self, fov: float | None = None, swap: bool | None = None) -> None:
+        if fov is not None:
+            self.player.vr.fisheye_fov_deg = fov
+        if swap is not None:
+            self.player.vr.fisheye_swap = swap
+        self.player.update()
         self.lbl_vr.setText(self.player.vr.describe() if self.player.vr_enabled else "")
 
     def _set_stereo(self, key: str) -> None:
@@ -762,6 +874,7 @@ class MainWindow(QMainWindow):
 
     def _toggle_sponsor(self, on: bool) -> None:
         self.skipper.enabled = on
+        self.notify("협찬 구간 자동 건너뛰기 " + ("켬" if on else "끔"))
 
     def _set_stream_height(self, h: int) -> None:
         self.settings.stream_max_height = h
@@ -778,11 +891,87 @@ class MainWindow(QMainWindow):
         self._set_volume(int(max(0, min(150, cur + delta))))
 
     def take_screenshot(self) -> None:
-        d = Path(self.settings.download_dir)
+        if not self._current or self.player.video_size[0] == 0:
+            self.notify("재생 중인 영상이 없어 캡처할 수 없습니다")
+            return
+        d = Path(self.settings.capture_dir)
         d.mkdir(parents=True, exist_ok=True)
         name = d / f"캡처_{_dt.datetime.now():%Y%m%d_%H%M%S}.png"
-        self.player.screenshot(str(name))
-        self.statusBar().showMessage(f"캡처 저장: {name}", 4000)
+        if self.player.screenshot(str(name)):
+            self.notify(f"캡처를 저장했습니다: {name.name}", 5000, "폴더 열기", lambda: self._open_folder(d))
+        else:
+            self.notify("캡처에 실패했습니다", 4000)
+
+    def _open_folder(self, d: Path) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(d)))
+
+    def _change_capture_dir(self) -> None:
+        d = QFileDialog.getExistingDirectory(self, "캡처 저장 폴더", self.settings.capture_dir)
+        if d:
+            self.settings.capture_dir = d
+            self.notify(f"캡처 저장 폴더: {d}")
+
+    def cycle_subtitles(self) -> None:
+        tracks = [t for t in (self.player.property("track-list", []) or []) if t.get("type") == "sub"]
+        if not tracks:
+            self.notify("이 영상에는 자막이 없습니다")
+            return
+        self.player.cycle_subtitles()
+        cur = self.player.property("sid", False)
+        if cur in (False, None, "no"):
+            self.notify("자막 끔")
+        else:
+            t = next((x for x in tracks if x.get("id") == cur), {})
+            self.notify(f"자막: {t.get('title') or t.get('lang') or cur} ({tracks.index(t) + 1 if t in tracks else '?'}/{len(tracks)})")
+
+    def toggle_audio_only(self, on: bool) -> None:
+        self._audio_only = on
+        try:
+            self.player.mpv["vid"] = "no" if on else "auto"
+        except Exception:  # noqa: BLE001
+            pass
+        self.notify("소리만 재생합니다 (영상 끔). 창을 최소화해도 계속 들립니다" if on else "영상을 다시 켰습니다")
+
+    def _fill_audio_devices(self) -> None:
+        self.m_audio.clear()
+        devices = self.player.property("audio-device-list", []) or []
+        cur = self.settings.audio_device
+        g = QActionGroup(self)
+        for d in devices:
+            name = str(d.get("name", ""))
+            desc = str(d.get("description", name))
+            a = QAction(("자동 (시스템 기본)" if name == "auto" else desc), self)
+            a.setCheckable(True)
+            a.setChecked(name == cur)
+            a.triggered.connect(lambda _c, n=name, ds=desc: self._set_audio_device(n, ds))
+            g.addAction(a)
+            self.m_audio.addAction(a)
+        if not devices:
+            self.m_audio.addAction("장치 목록을 가져올 수 없습니다").setEnabled(False)
+
+    def _set_audio_device(self, name: str, desc: str) -> None:
+        self.settings.audio_device = name
+        try:
+            self.player.mpv["audio-device"] = name
+        except Exception as e:  # noqa: BLE001
+            self.notify(f"소리 출력 장치를 바꾸지 못했습니다: {e}", 6000)
+            return
+        self.notify(f"소리 출력: {desc}")
+
+    def register_default_player(self) -> None:
+        if sys.platform == "win32":
+            from classplayer.platform_win import register_default_player
+            try:
+                msg = register_default_player()
+            except Exception as e:  # noqa: BLE001
+                msg = f"등록에 실패했습니다: {e}"
+            QMessageBox.information(self, "기본 플레이어로 등록", msg)
+        else:
+            QMessageBox.information(self, "기본 플레이어로 등록",
+                                    "맥에서는 Finder에서 영상 파일을 선택하고 ⌘I(정보 가져오기) > '다음으로 열기'에서 "
+                                    "ClassPlayer를 고른 뒤 '모두 변경…'을 누르세요. 그 확장자의 모든 파일이 ClassPlayer로 열립니다.")
 
     def _focus_search(self) -> None:
         self.dock_library.show()
@@ -849,7 +1038,8 @@ class MainWindow(QMainWindow):
             self.controls.setGeometry((self.stage.width() - w) // 2, self.stage.height() - h - 24, w, h)
 
     def _auto_hide_controls(self) -> None:
-        if self._fullscreen and not self.controls.slider.isSliderDown() and not self.controls.underMouse():
+        if self._fullscreen and not self.controls.slider.isSliderDown() and not self.controls.underMouse() \
+                and QApplication.activePopupWidget() is None:
             self.controls.hide()
             self.preview.hide()
             self.player.setCursor(Qt.CursorShape.BlankCursor)
@@ -865,6 +1055,11 @@ class MainWindow(QMainWindow):
     def eventFilter(self, obj: QObject, e: QEvent) -> bool:
         if obj is getattr(self, "stage", None) and e.type() == QEvent.Type.Resize:
             self._place_overlay()
+            if self.loading.isVisible():
+                self.loading.move((self.stage.width() - self.loading.width()) // 2,
+                                  (self.stage.height() - self.loading.height()) // 2)
+            if self.toast.isVisible():
+                self.toast.move((self.stage.width() - self.toast.width()) // 2, 24)
             return False
         if e.type() == QEvent.Type.KeyPress and QApplication.activeWindow() is self:
             fw = QApplication.focusWidget()
@@ -939,7 +1134,7 @@ class MainWindow(QMainWindow):
         new = max(0.25, min(4.0, round((cur + delta) * 4) / 4))
         self.player.set_speed(new)
         self.controls.set_speed(new)
-        self.statusBar().showMessage(f"재생 속도 {new:g}×", 2000)
+        self.notify(f"재생 속도 {new:g}×", 1500)
 
     # ------------------------------------------------------------------ 드래그 앤 드롭 / 종료
     def dragEnterEvent(self, e: QDragEnterEvent) -> None:
@@ -975,6 +1170,7 @@ def main() -> None:
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setOrganizationName("ClassPlayer")
+    app.setStyle("Fusion")   # 맥/윈도우에서 같은 모양으로 그리기
     app.setStyleSheet(QSS)
     icon_path = (bootstrap.bundled_dir() or Path(__file__).resolve().parent) / "assets" / "icon.png"
     if icon_path.exists():

@@ -9,7 +9,7 @@ from pathlib import Path
 APP_NAME = "ClassPlayer"
 VIDEO_EXTENSIONS = {
     ".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v", ".ts", ".m2ts", ".mts",
-    ".wmv", ".flv", ".mpg", ".mpeg", ".3gp", ".ogv", ".vob", ".mxf", ".hevc", ".h265",
+    ".wmv", ".flv", ".mpg", ".mpeg", ".3gp", ".ogv", ".vob", ".mxf", ".hevc", ".h265", ".insv", ".insp",
 }
 
 

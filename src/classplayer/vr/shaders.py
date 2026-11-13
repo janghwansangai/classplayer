@@ -24,7 +24,9 @@ uniform vec2  u_viewSize;    // 출력 크기(픽셀)
 uniform float u_yaw;         // 라디안, + = 오른쪽
 uniform float u_pitch;       // 라디안, + = 위
 uniform float u_fov;         // 가로 시야각(라디안)
-uniform int   u_projection;  // 0 = 등장방형, 1 = 유튜브 EAC
+uniform int   u_projection;  // 0 = 등장방형, 1 = 유튜브 EAC, 2 = 듀얼 피쉬아이(Insta360 원본)
+uniform float u_fisheyeFov;  // 렌즈 화각(라디안), 보통 190~200도
+uniform int   u_fisheyeSwap; // 1 = 앞/뒤 렌즈 좌우 바꿈
 uniform int   u_stereo;      // 0 = 모노, 1 = 상하 분할, 2 = 좌우 분할
 uniform int   u_hq;          // 1 = 바이큐빅 표본화
 uniform int   u_flipY;       // 1 = 텍스처 세로 뒤집기
@@ -126,9 +128,24 @@ vec2 eacUV(vec3 d) {
     return vec2((uf + uFace) / 3.0, (vf + vFace) / 2.0);
 }
 
+// 듀얼 피쉬아이: 왼쪽 원 = 앞 렌즈, 오른쪽 원 = 뒤 렌즈 (등거리 투영)
+vec2 dfisheyeUV(vec3 d) {
+    vec3 v = vec3(d.x, -d.y, -d.z);          // x 오른쪽, y 아래, z 정면
+    bool front = v.z >= 0.0;
+    if (u_fisheyeSwap == 1) front = !front;
+    float z = (v.z >= 0.0) ? v.z : -v.z;
+    float x = (v.z >= 0.0) ? v.x : -v.x;
+    float phi = acos(clamp(z, -1.0, 1.0));   // 광축에서 벗어난 각
+    float theta = atan(v.y, x);
+    float r = phi / (u_fisheyeFov * 0.5);    // 0 = 중심, 1 = 원 가장자리
+    r = min(r, 1.02);
+    float cx = front ? 0.75 : 0.25;   // FFmpeg dfisheye 규약: 왼쪽 원이 뒤, 오른쪽 원이 앞
+    return vec2(cx + r * cos(theta) * 0.25, 0.5 + r * sin(theta) * 0.5);
+}
+
 void main() {
     vec3 d = rayDir();
-    vec2 uv = (u_projection == 1) ? eacUV(d) : equirectUV(d);
+    vec2 uv = (u_projection == 1) ? eacUV(d) : (u_projection == 2) ? dfisheyeUV(d) : equirectUV(d);
     if (u_stereo == 1)      uv.y *= 0.5;
     else if (u_stereo == 2) uv.x *= 0.5;
     if (u_flipY == 1) uv.y = 1.0 - uv.y;

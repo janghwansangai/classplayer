@@ -89,6 +89,24 @@ class Settings:
     def vr_hq(self, v: bool) -> None:
         self.q.setValue("vr/hq", bool(v))
 
+    # --- 캡처 / 소리 ---
+    @property
+    def capture_dir(self) -> str:
+        default = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.PicturesLocation) or str(Path.home())
+        return str(self.q.value("capture/dir", str(Path(default) / "ClassPlayer 캡처")))
+
+    @capture_dir.setter
+    def capture_dir(self, d: str) -> None:
+        self.q.setValue("capture/dir", d)
+
+    @property
+    def audio_device(self) -> str:
+        return str(self.q.value("audio/device", "auto"))
+
+    @audio_device.setter
+    def audio_device(self, d: str) -> None:
+        self.q.setValue("audio/device", d)
+
     # --- 일반 ---
     @property
     def volume(self) -> int:

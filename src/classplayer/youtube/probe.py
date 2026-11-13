@@ -52,6 +52,11 @@ def probe_spherical(ffprobe: str | None, path: str) -> SphericalInfo:
         elif tags.get("stereomode") in ("left-right", "left_right", "side-by-side"):
             info.stereo = "sbs"
         break
+    if path.lower().endswith((".insv", ".insp")) and info.width and info.height:
+        info.is_spherical = True
+        # Insta360 원본: 가로가 세로의 2배면 두 렌즈가 나란히 담긴 듀얼 피쉬아이
+        info.projection = "dfisheye" if abs(info.width / info.height - 2.0) < 0.1 else "equirect"
+        return info
     if not info.is_spherical and info.width and info.height:
         ratio = info.width / info.height
         # 메타데이터가 없어도 정확히 2:1 비율의 큰 영상은 360도일 가능성이 높다

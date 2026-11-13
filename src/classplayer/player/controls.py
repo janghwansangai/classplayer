@@ -81,7 +81,6 @@ class ControlBar(QWidget):
 
         self.btn_play = tool("▶", "재생/일시정지 (Space)")
         self.btn_play.setObjectName("play")
-        self.btn_play.setStyleSheet("color: white; font-size: 16px; font-weight: 700;")
         self.btn_play.clicked.connect(self.play_clicked)
         self.btn_back = tool("", "10초 뒤로 (←)", QStyle.StandardPixmap.SP_MediaSeekBackward)
         self.btn_fwd = tool("", "10초 앞으로 (→)", QStyle.StandardPixmap.SP_MediaSeekForward)

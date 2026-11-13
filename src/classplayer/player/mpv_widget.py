@@ -52,6 +52,7 @@ class MpvWidget(QOpenGLWidget):
     mute_changed = Signal(bool)
     codec_changed = Signal(str)
     log_message = Signal(str, str, str)
+    buffering_changed = Signal(bool)
     # 사용자 입력
     clicked = Signal()
     double_clicked = Signal()
@@ -137,6 +138,7 @@ class MpvWidget(QOpenGLWidget):
         m.observe_property("volume", lambda _n, v: self.volume_changed.emit(float(v or 0.0)))
         m.observe_property("mute", lambda _n, v: self.mute_changed.emit(bool(v)))
         m.observe_property("eof-reached", lambda _n, v: self.eof_reached.emit() if v else None)
+        m.observe_property("paused-for-cache", lambda _n, v: self.buffering_changed.emit(bool(v)))
 
         @m.event_callback("file-loaded")
         def _loaded(_event):
@@ -242,8 +244,10 @@ class MpvWidget(QOpenGLWidget):
     def cycle_audio(self) -> None:
         self.mpv.command("cycle", "audio")
 
-    def screenshot(self, path: str) -> None:
-        self.mpv.command("screenshot-to-file", path, "video")
+    def screenshot(self, path: str) -> bool:
+        """화면에 보이는 그대로 저장한다 (360도 모드면 투영된 시점이 저장된다)."""
+        img = self.grabFramebuffer()
+        return (not img.isNull()) and img.save(path)
 
     def property(self, name: str, default: Any = None) -> Any:
         try:
@@ -332,7 +336,7 @@ class MpvWidget(QOpenGLWidget):
         GL.glDeleteShader(fs)
         self._prog = prog
         for name in ("u_tex", "u_texSize", "u_viewSize", "u_yaw", "u_pitch", "u_fov",
-                     "u_projection", "u_stereo", "u_hq", "u_flipY"):
+                     "u_projection", "u_stereo", "u_hq", "u_flipY", "u_fisheyeFov", "u_fisheyeSwap"):
             self._uniforms[name] = GL.glGetUniformLocation(prog, name)
         self._vao = GL.glGenVertexArrays(1)
 
@@ -417,7 +421,9 @@ class MpvWidget(QOpenGLWidget):
         GL.glUniform1f(u["u_yaw"], v.yaw)
         GL.glUniform1f(u["u_pitch"], v.pitch)
         GL.glUniform1f(u["u_fov"], v.fov)
-        GL.glUniform1i(u["u_projection"], 1 if v.projection == "eac" else 0)
+        GL.glUniform1i(u["u_projection"], {"eac": 1, "dfisheye": 2}.get(v.projection, 0))
+        GL.glUniform1f(u["u_fisheyeFov"], math.radians(v.fisheye_fov_deg))
+        GL.glUniform1i(u["u_fisheyeSwap"], 1 if v.fisheye_swap else 0)
         GL.glUniform1i(u["u_stereo"], {"mono": 0, "tb": 1, "sbs": 2}.get(v.stereo, 0))
         GL.glUniform1i(u["u_hq"], 1 if v.hq else 0)
         GL.glUniform1i(u["u_flipY"], self._flip_y)
