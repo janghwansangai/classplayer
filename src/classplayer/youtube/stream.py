@@ -95,6 +95,8 @@ CACHE_SECONDS = 20 * 60        # 메모리 캐시 (같은 실행 안에서)
 # 기본 클라이언트(TV) 주소가 403 으로 막히는 영상(어린이용 등)은 이 순서로 다시 시도한다
 # 2026-11-14 확인: 어린이용 영상은 어느 클라이언트든 PO 토큰 없이는 403 → 한 번만 다시 시도하고 안내한다
 FALLBACK_CLIENTS: list[list[str]] = [["web_embedded"]]
+# PO 토큰 실행 파일(bgutil-pot)이 있으면 토큰을 받는 web 계열 클라이언트로 다시 시도한다
+FALLBACK_CLIENTS_POT: list[list[str]] = [["mweb"], ["web_safari"], ["web_embedded"]]
 DISK_MAX_SECONDS = 5 * 3600    # 디스크 캐시 최대 (유튜브 주소는 보통 6시간 유효)
 
 
@@ -166,8 +168,9 @@ class StreamResolver(QObject):
     failed = Signal(str, str)        # url, message
 
     def __init__(self, js_runtime: str | None, max_height: int = 2160, parent=None,
-                 js_runtime_path: str | None = None) -> None:
+                 js_runtime_path: str | None = None, pot_cli: str | None = None) -> None:
         super().__init__(parent)
+        self.pot_cli = pot_cli
         self.js_runtime = js_runtime
         self.js_runtime_path = js_runtime_path
         self.max_height = max_height
@@ -202,6 +205,10 @@ class StreamResolver(QObject):
 
     def cancel(self) -> None:
         self._gen += 1
+
+    @property
+    def fallback_clients(self) -> list[list[str]]:
+        return FALLBACK_CLIENTS_POT if self.pot_cli else FALLBACK_CLIENTS
 
     @staticmethod
     def _dkey(key: tuple[str, int]) -> str:
@@ -302,8 +309,13 @@ class StreamResolver(QObject):
         }
         if self.js_runtime:
             opts["js_runtimes"] = {self.js_runtime: {"path": self.js_runtime_path}}
+        ea: dict[str, Any] = {}
         if clients:
-            opts["extractor_args"] = {"youtube": {"player_client": list(clients)}}
+            ea["youtube"] = {"player_client": list(clients)}
+        from classplayer.bootstrap import pot_extractor_args
+        ea.update(pot_extractor_args(self.pot_cli, enabled=bool(clients)))   # 다시 시도할 때만 토큰 사용
+        if ea:
+            opts["extractor_args"] = ea
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
         return resolve_info(info, url)

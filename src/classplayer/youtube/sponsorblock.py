@@ -7,6 +7,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 
+from classplayer.bootstrap import https_open
 from PySide6.QtCore import QObject, Signal
 
 API = "https://sponsor.ajay.app/api/skipSegments"
@@ -33,7 +34,7 @@ def fetch_segments(video_id: str, categories: list[str], timeout: float = 6.0) -
     q = urllib.parse.urlencode({"videoID": video_id, "categories": json.dumps(categories)})
     req = urllib.request.Request(f"{API}?{q}", headers={"User-Agent": "ClassPlayer/0.1"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with https_open(req, timeout=timeout) as r:
             if r.status == 404:
                 return []
             data = json.loads(r.read().decode("utf-8"))

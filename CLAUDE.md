@@ -7,7 +7,7 @@
 - 검증: `uv run pytest -q tests/test_units.py` → `tests/make_assets.sh` → `tests/smoke.py`(화면 캡처 PNG를 직접 보고 방향 확인) / `tests/perf.py`(드롭 프레임, hwdec 이름).
 - EAC 큐브맵 좌표는 FFmpeg v360의 eac 입력 규약을 따르며, 2026-11-13 라벨 영상으로 6방향 검증 완료. 바꿀 때는 반드시 smoke 캡처로 다시 확인.
 - 맥에서 QOpenGLWidget + mpv 렌더 API: 일반 모드는 flip_y=True, 360도 FBO 경로는 flip_y=False + 셰이더 u_flipY=0 이 맞는 조합.
-- 아직 없는 것: 윈도우 실기 검증, PO 토큰 제공 플러그인(어린이용 영상 403 해결에 필요), 초해상도(FSRCNNX) 셰이더.
+- 아직 없는 것: 윈도우 실기 검증, 초해상도(FSRCNNX) 셰이더. PO 토큰(bgutil-pot)은 넣었으나 실제로 어린이용 영상이 열리는지는 미검증(자동 모드에서 내려받은 실행 파일 실행이 막혀 사용자 확인 필요).
 - 유튜브 재생 경로: `youtube/stream.py`의 StreamResolver가 앱 안에서 yt-dlp Python API로 주소를 풀어 `MpvWidget.play_stream()`에 넘긴다(기본). mpv 내장 ytdl 훅은 실패 시 폴백인데, 2026-11-13 기준 훅 경로는 googlevideo 403이 났고 내부 풀기 경로는 정상이었다.
 - 성능 튜닝용 환경변수: `CLASSPLAYER_SWAP_INTERVAL`(기본 1), `CLASSPLAYER_BLOCK_TARGET`(기본 1). 로컬 4K60 HEVC는 어느 조합이든 드롭 0~3.
 - 테스트: `CLASSPLAYER_TEST_MAX_HEIGHT=1080 uv run python tests/perf.py <유튜브링크> /tmp/out 24` 로 스트리밍 드롭 측정.
@@ -36,3 +36,5 @@
 - 링크 입력칸에 붙여넣으면(한 번에 10자 넘게 늘고 클립보드와 같으면) 바로 재생. 링크의 t=/start= 는 mpv start 로 반영.
 - 설치 파일: 맥 `dist/ClassPlayer-mac-arm64.dmg`(build_mac.sh 의 make_dmg, 응용 프로그램 바로가기 포함), 윈도우 `packaging/classplayer.iss`(Inno Setup, 사용자 폴더 %LOCALAPPDATA%\Programs\ClassPlayer 설치·관리자 권한 불필요 → 앱 업데이트가 덮어쓸 수 있음). CI 가 ISCC 로 ClassPlayer-Setup-windows-x64.exe 를 만들어 릴리스에 올린다. 업데이트는 계속 zip 을 쓴다.
 - 알림(Toast)은 자기 스타일시트가 앱 QSS 를 덮으므로 버튼 색을 직접 지정한다. 다운로드 창 글은 ElideLabel(폭 고정, … 줄임).
+- PO 토큰: `vendor/yt_dlp_plugins`(bgutil-ytdlp-pot-provider-rs v0.8.1 플러그인, GPL-3.0) + 실행 파일 bgutil-pot(빌드 때 `packaging/fetch_bgutil.sh`/CI 가 SHA-256 고정으로 받아 bin/ → 번들). bootstrap.enable_po_token_plugin()이 실행 파일이 있을 때만 플러그인 폴더를 sys.path 에 넣는다. 평소 요청은 pot_extractor_args(enabled=False)로 없는 경로를 넘겨 플러그인을 꺼 두고, 403 재시도(FALLBACK_CLIENTS_POT: mweb → web_safari → web_embedded, 다운로드는 mweb/web_safari)에서만 켠다.
+- HTTPS: 앱이 직접 여는 연결(업데이트, 미리보기 시트, 검색 썸네일, SponsorBlock)은 bootstrap.https_open() → truststore(운영체제 인증서; 학교망 HTTPS 검사 인증서 포함), 실패 시 운영체제+certifi. v0.4.2 이하 번들에서 업데이트 확인이 CERTIFICATE_VERIFY_FAILED 로 실패한 사례가 있음(사용자 학교망 추정). 자가 점검 JSON 의 ssl/https_app/pot_cli 확인.

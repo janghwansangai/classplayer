@@ -24,7 +24,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal
 
 from classplayer import __version__
-from classplayer.bootstrap import bundled_dir
+from classplayer.bootstrap import bundled_dir, https_open
 
 REPO = "janghwansangai/classplayer"
 API_LATEST = f"https://api.github.com/repos/{REPO}/releases/latest"
@@ -66,7 +66,7 @@ class ReleaseInfo:
 
 def fetch_latest(timeout: float = 10.0) -> ReleaseInfo:
     req = urllib.request.Request(API_LATEST, headers={"User-Agent": UA, "Accept": "application/vnd.github+json"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with https_open(req, timeout=timeout) as r:
         data = json.loads(r.read().decode("utf-8"))
     info = ReleaseInfo(version=str(data.get("tag_name") or ""), notes=str(data.get("body") or ""),
                        page=str(data.get("html_url") or RELEASES_PAGE))
@@ -142,7 +142,7 @@ class Updater(QObject):
         self.work_dir.mkdir(parents=True, exist_ok=True)
         zpath = self.work_dir / asset_name()
         req = urllib.request.Request(info.asset_url, headers={"User-Agent": UA})
-        with urllib.request.urlopen(req, timeout=30) as r, open(zpath, "wb") as f:
+        with https_open(req, timeout=30) as r, open(zpath, "wb") as f:
             total = int(r.headers.get("Content-Length") or info.asset_size or 0)
             done = 0
             while True:

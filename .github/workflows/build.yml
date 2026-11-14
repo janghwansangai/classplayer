@@ -35,6 +35,15 @@ jobs:
           if (-not (Test-Path bin\libmpv-2.dll)) { throw "libmpv-2.dll not found" }
       - name: 의존성 설치
         run: uv sync
+      - name: PO 토큰 실행 파일 받기 (bgutil-pot, SHA-256 고정)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v0.8.1 -R jim60105/bgutil-ytdlp-pot-provider-rs -p "bgutil-pot-windows-x86_64.exe" --dir bin
+          $h = (Get-FileHash bin\bgutil-pot-windows-x86_64.exe -Algorithm SHA256).Hash.ToLower()
+          if ($h -ne "25d6b05c79176aa792454c3d1727922ca47e56cf11cb1e866615d751819b14a0") { throw "bgutil-pot SHA-256 mismatch: $h" }
+          Move-Item bin\bgutil-pot-windows-x86_64.exe bin\bgutil-pot.exe -Force
       - name: 단위 테스트
         run: uv run pytest -q tests/test_units.py
       - name: 빌드
@@ -92,6 +101,7 @@ jobs:
       - name: 빌드
         env:
           SKIP_SELFTEST: "1"
+          GH_TOKEN: ${{ github.token }}
         run: ./packaging/build_mac.sh
       - uses: actions/upload-artifact@v4
         with:

@@ -9,6 +9,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
+from classplayer.bootstrap import https_open
 from PySide6.QtCore import QObject, Signal
 
 _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -108,7 +109,7 @@ class YouTubeSearcher(QObject):
                 if data is None:
                     try:
                         req = urllib.request.Request(r.thumb_url, headers={"User-Agent": _UA})
-                        with urllib.request.urlopen(req, timeout=10) as resp:
+                        with https_open(req, timeout=10) as resp:
                             data = resp.read()
                         self._thumb_cache[r.video_id] = data
                     except Exception:  # noqa: BLE001

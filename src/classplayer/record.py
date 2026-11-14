@@ -192,7 +192,8 @@ class LocalRecordJob(QObject):
 
 def make_url_record_job(url: str, title: str, out_dir: str, *, start: float | None, end: float | None,
                         audio: bool, ffmpeg: str | None, js_runtime: str | None,
-                        remove_sponsors: bool, sponsor_categories: tuple[str, ...]) -> DownloadJob:
+                        remove_sponsors: bool, sponsor_categories: tuple[str, ...],
+                        pot_cli: str | None = None) -> DownloadJob:
     """유튜브·드라이브 링크의 전체/구간을 받는 작업. 이름에 녹화/녹음 표시를 붙인다."""
     tag = make_tag(audio, start, end)
     extra: dict = {"outtmpl": str(Path(out_dir) / f"%(title).90B {tag}.%(ext)s")}
@@ -208,7 +209,7 @@ def make_url_record_job(url: str, title: str, out_dir: str, *, start: float | No
         # 구간 녹화에서 광고 구간을 빼면 시간이 어긋나므로 전체 녹화에서만 뺀다
         remove_sponsors=remove_sponsors and not section,
         sponsor_categories=sponsor_categories,
-        ffmpeg_path=ffmpeg, js_runtime=js_runtime, extra=extra,
+        ffmpeg_path=ffmpeg, js_runtime=js_runtime, pot_cli=pot_cli, extra=extra,
     )
     job = DownloadJob(req)
     job.display = f"{'녹음' if audio else '녹화'}: {title or url} {tag}"   # 목록에 보일 이름 (req.url 은 그대로)

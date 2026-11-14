@@ -13,6 +13,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from classplayer.bootstrap import https_open
 from PySide6.QtCore import QObject, QStandardPaths, Signal
 from PySide6.QtGui import QPixmap
 
@@ -114,7 +115,7 @@ class ThumbnailProvider(QObject):
             for _attempt in range(2):
                 try:
                     req = urllib.request.Request(url, headers=self._headers or {"User-Agent": _UA})
-                    with urllib.request.urlopen(req, timeout=10) as r:
+                    with https_open(req, timeout=10) as r:
                         data = r.read()
                     break
                 except Exception:  # noqa: BLE001

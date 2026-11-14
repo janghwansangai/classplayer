@@ -112,3 +112,70 @@ def is_cloud_placeholder(path: str) -> bool:
         # FILE_ATTRIBUTE_OFFLINE, RECALL_ON_DATA_ACCESS, RECALL_ON_OPEN
         return bool(attrs & (0x1000 | 0x400000 | 0x40000))
     return False
+
+
+def enable_po_token_plugin() -> str | None:
+    """PO 토큰 실행 파일(bgutil-pot)이 있으면 yt-dlp 플러그인 폴더를 검색 경로에 넣고 그 경로를 돌려준다.
+
+    유튜브 어린이용 영상 등은 PO 토큰 없이는 영상 주소가 403 으로 막힌다. yt-dlp 가 처음 YoutubeDL 을 만들 때
+    sys.path 에서 yt_dlp_plugins 를 찾으므로, yt-dlp 를 쓰기 전에 불러야 한다. 실행 파일이 없으면 아무것도 안 한다.
+    """
+    exe = find_tool("bgutil-pot")
+    if not exe:
+        return None
+    b = bundled_dir()
+    vendor = (b / "classplayer_vendor") if b else Path(__file__).resolve().parent / "vendor"
+    if vendor.is_dir() and str(vendor) not in sys.path:
+        sys.path.append(str(vendor))
+    return exe
+
+
+_POT_OFF = os.path.join(os.sep, "classplayer-pot-disabled", "bgutil-pot")
+
+
+def pot_extractor_args(pot_cli: str | None, enabled: bool) -> dict:
+    """yt-dlp extractor_args 에 넣을 PO 토큰 플러그인 설정.
+
+    평소에는 없는 경로를 넘겨 플러그인을 '사용 불가'로 만들고(일반 영상 속도·동작 그대로),
+    403 으로 막혀 다시 시도할 때만 실제 실행 파일 경로를 넘긴다.
+    """
+    if not pot_cli:
+        return {}
+    return {"youtubepot-bgutilcli": {"cli_path": [pot_cli if enabled else _POT_OFF]}}
+
+
+_SSL_CTX = None
+
+
+def ssl_context():
+    """HTTPS 인증서 확인용 설정: 운영체제 인증서 + certifi 인증서를 함께 쓴다.
+
+    패키지로 묶은 앱의 Python 은 운영체제 인증서 위치를 못 찾을 때가 있어 urllib 연결이
+    CERTIFICATE_VERIFY_FAILED 로 실패한다(업데이트 확인, 미리보기 그림, 검색 썸네일, SponsorBlock).
+    학교망 HTTPS 검사 장비는 자체 인증서를 키체인/윈도우 저장소에만 넣으므로 truststore 로 운영체제에 맡긴다.
+    """
+    global _SSL_CTX
+    if _SSL_CTX is None:
+        import ssl
+        ctx = None
+        try:
+            # 운영체제 방식으로 확인 (맥 키체인, 윈도우 인증서 저장소). 학교망 HTTPS 검사 인증서도 브라우저처럼 믿는다.
+            import truststore
+            ctx = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        except Exception:  # noqa: BLE001
+            ctx = None
+        if ctx is None:
+            ctx = ssl.create_default_context()
+            try:
+                import certifi
+                ctx.load_verify_locations(cafile=certifi.where())
+            except Exception:  # noqa: BLE001
+                pass
+        _SSL_CTX = ctx
+    return _SSL_CTX
+
+
+def https_open(req, timeout: float = 15.0):
+    """urllib.request.urlopen 대신 쓴다 (인증서 문제 방지)."""
+    import urllib.request
+    return urllib.request.urlopen(req, timeout=timeout, context=ssl_context())

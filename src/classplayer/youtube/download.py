@@ -44,6 +44,7 @@ class DownloadRequest:
     playlist: bool = False
     ffmpeg_path: str | None = None
     js_runtime: str | None = None
+    pot_cli: str | None = None          # PO 토큰 실행 파일 (어린이용 영상 403 대응)
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -162,6 +163,9 @@ class DownloadJob(QObject):
             opts["ffmpeg_location"] = r.ffmpeg_path
         if r.js_runtime:
             opts["js_runtimes"] = {r.js_runtime: {"path": None}}
+        if r.pot_cli:
+            from classplayer.bootstrap import pot_extractor_args
+            opts["extractor_args"] = pot_extractor_args(r.pot_cli, enabled=False)
         opts.update(r.extra)
         return opts
 
@@ -185,6 +189,9 @@ class DownloadJob(QObject):
             common["ffmpeg_location"] = r.ffmpeg_path
         if r.js_runtime:
             common["js_runtimes"] = {r.js_runtime: {"path": None}}
+        if r.pot_cli:
+            from classplayer.bootstrap import pot_extractor_args
+            common["extractor_args"] = pot_extractor_args(r.pot_cli, enabled=False)
         # 1) 사람이 만든 자막(한국어·영어)  2) 없으면 원래 말소리 자동 자막(번역 아님)
         passes = [
             {"writesubtitles": True, "writeautomaticsub": False, "subtitleslangs": list(r.sub_langs)},
@@ -222,12 +229,16 @@ class DownloadJob(QObject):
                     info = ydl.extract_info(self.req.url, download=True)
             except Exception as e:  # noqa: BLE001
                 # 어린이용 영상 등: 기본 방식 주소가 403 → android_vr 방식으로 한 번 더
-                if "403" not in str(e) or self._cancel.is_set() or "extractor_args" in self.req.extra:
+                if "403" not in str(e) or self._cancel.is_set() or "youtube" in (self.req.extra.get("extractor_args") or {}):
                     raise
                 self.log.emit("기본 방식이 막혀(403) 다른 방식으로 다시 받습니다")
                 self.progress.emit(0.0, "다른 방법으로 다시 받는 중…")
                 opts = self._build_opts()
-                opts["extractor_args"] = {"youtube": {"player_client": ["android_vr"]}}
+                from classplayer.bootstrap import pot_extractor_args
+                ea = dict(opts.get("extractor_args") or {})
+                ea["youtube"] = {"player_client": ["mweb", "web_safari"] if self.req.pot_cli else ["android_vr"]}
+                ea.update(pot_extractor_args(self.req.pot_cli, enabled=True))
+                opts["extractor_args"] = ea
                 with yt_dlp.YoutubeDL(opts) as ydl:
                     info = ydl.extract_info(self.req.url, download=True)
             if not self.final_path and info:

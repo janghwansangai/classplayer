@@ -3,6 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 rm -rf build dist
+./packaging/fetch_bgutil.sh || echo "bgutil-pot 을 받지 못했습니다 (어린이용 영상 재시도 없이 빌드)"
 uv run pyinstaller --noconfirm --clean packaging/classplayer.spec
 APP=dist/ClassPlayer.app
 # python-mpv 는 'libmpv.dylib' 이름으로 찾으므로 버전 붙은 파일에 링크를 건다

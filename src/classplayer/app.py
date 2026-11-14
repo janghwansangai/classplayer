@@ -35,7 +35,7 @@ from classplayer.youtube.download import PRESETS, DownloadJob, DownloadRequest
 from classplayer.youtube.probe import probe_spherical
 from classplayer.youtube.search import SearchResult, YouTubeSearcher, fmt_views
 from classplayer.youtube.sponsorblock import SponsorSkipper
-from classplayer.youtube.stream import FALLBACK_CLIENTS, StreamResolver
+from classplayer.youtube.stream import StreamResolver
 
 HELP_TEXT = """\
 Space  재생/일시정지        ←/→  10초 이동 (Shift: 60초)
@@ -774,6 +774,8 @@ class MainWindow(QMainWindow):
         self.js_runtime = next((r for r in ("deno", "node", "bun") if bootstrap.find_tool(r)), None)
         if self.ffmpeg:   # yt-dlp 구간 받기는 PATH 의 ffmpeg 만 본다
             bootstrap.add_to_path(str(Path(self.ffmpeg).parent))
+        # 어린이용 영상 403 대응: PO 토큰 실행 파일이 있으면 yt-dlp 플러그인을 켠다 (yt-dlp 를 쓰기 전에)
+        self.pot_cli = bootstrap.enable_po_token_plugin()
 
         self.setWindowTitle(APP_NAME)
         self.resize(1280, 820)
@@ -936,7 +938,8 @@ class MainWindow(QMainWindow):
 
         # --- 유튜브 주소 풀기
         self.resolver = StreamResolver(self.js_runtime, self.settings.stream_max_height,
-                                       js_runtime_path=bootstrap.find_tool(self.js_runtime) if self.js_runtime else None)
+                                       js_runtime_path=bootstrap.find_tool(self.js_runtime) if self.js_runtime else None,
+                                       pot_cli=self.pot_cli)
         self.resolver.warm_up()
         self.resolver.resolved.connect(self._on_stream_resolved)
         self.resolver.failed.connect(self._on_stream_failed)
@@ -1358,13 +1361,14 @@ class MainWindow(QMainWindow):
             self.resolver.resolve(cur)
             return
         step = getattr(self, "_client_step", 0)
-        if self._current_is_youtube and step < len(FALLBACK_CLIENTS) and not getattr(self, "_mpv_fallback", False):
+        fallbacks = self.resolver.fallback_clients
+        if self._current_is_youtube and step < len(fallbacks) and not getattr(self, "_mpv_fallback", False):
             # 어린이용 영상 등은 기본 방식 주소가 403 으로 막힌다 → 다른 방식으로 다시 받는다
             self._client_step = step + 1
             self.resolver.forget(cur)
-            self._show_loading(f"다른 방법으로 다시 여는 중… ({step + 1}/{len(FALLBACK_CLIENTS)})")
+            self._show_loading(f"다른 방법으로 다시 여는 중… ({step + 1}/{len(fallbacks)})")
             self._awaiting_resolve = True
-            self.resolver.resolve(cur, clients=FALLBACK_CLIENTS[step])
+            self.resolver.resolve(cur, clients=fallbacks[step])
             return
         self._refetching = False
         self.loading.hide()
@@ -1535,7 +1539,8 @@ class MainWindow(QMainWindow):
                 return
             job = make_url_record_job(src, title, out_dir, start=a, end=b, audio=audio, ffmpeg=self.ffmpeg,
                                       js_runtime=self.js_runtime, remove_sponsors=self.a_sponsor.isChecked(),
-                                      sponsor_categories=tuple(self.settings.sponsorblock_categories))
+                                      sponsor_categories=tuple(self.settings.sponsorblock_categories),
+                                      pot_cli=self.pot_cli)
         else:
             if not self.ffmpeg:
                 self.notify("ffmpeg 를 찾지 못해 녹화할 수 없습니다", 6000)
@@ -1805,6 +1810,7 @@ class MainWindow(QMainWindow):
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         req = dlg.request(self.ffmpeg, self.js_runtime)
+        req.pot_cli = self.pot_cli
         if not is_url(req.url):
             QMessageBox.warning(self, APP_NAME, "유튜브 링크를 입력하세요.")
             return
@@ -2221,6 +2227,19 @@ def _run_selftest(app: QApplication, win: "MainWindow", target: str) -> None:
         info["js_runtime"] = win.js_runtime
         info["bundled"] = bool(bootstrap.bundled_dir())
         info["libmpv"] = bootstrap.loaded_libmpv_path()
+        info["pot_cli"] = win.pot_cli
+        import urllib.request
+        try:
+            urllib.request.urlopen("https://api.github.com/", timeout=10)
+            info["https_plain"] = "ok"
+        except Exception as e:  # noqa: BLE001
+            info["https_plain"] = f"error: {str(e)[:80]}"
+        info["ssl"] = type(bootstrap.ssl_context()).__module__
+        try:
+            from classplayer.updater import fetch_latest
+            info["https_app"] = "ok " + fetch_latest().version
+        except Exception as e:  # noqa: BLE001
+            info["https_app"] = f"error: {str(e)[:80]}"
         try:
             import curl_cffi  # noqa: F401
             info["curl_cffi"] = True

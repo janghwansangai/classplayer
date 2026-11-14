@@ -44,8 +44,14 @@ for tool in ("ffmpeg", "ffprobe"):
 js = find("deno") or find("node")
 if js:
     binaries.append((js, "."))
+# PO 토큰 실행 파일 (packaging/fetch_bgutil.sh 또는 CI 가 bin/ 에 받아 둠). 없으면 건너뜀.
+pot = ROOT / "bin" / ("bgutil-pot.exe" if IS_WIN else "bgutil-pot")
+if pot.exists():
+    binaries.append((str(pot), "."))
 
-datas = [(str(SRC / "classplayer" / "assets" / "icon.png"), "assets")] + collect_data_files("yt_dlp_ejs") + collect_data_files("yt_dlp", includes=["**/*.json"])
+datas = [(str(SRC / "classplayer" / "assets" / "icon.png"), "assets"),
+         # yt-dlp 가 파일 시스템에서 찾는 플러그인이라 .py 그대로 넣는다 (bootstrap.enable_po_token_plugin)
+         (str(SRC / "classplayer" / "vendor" / "yt_dlp_plugins"), "classplayer_vendor/yt_dlp_plugins")] + collect_data_files("yt_dlp_ejs") + collect_data_files("yt_dlp", includes=["**/*.json"])
 hiddenimports = (collect_submodules("yt_dlp") + collect_submodules("yt_dlp_ejs") + collect_submodules("OpenGL")
                  + collect_submodules("curl_cffi") + ["mpv"])
 
