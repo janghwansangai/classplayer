@@ -1,0 +1,6 @@
+{
+  // ClassPlayer 소개·다운로드 사이트 (Cloudflare Workers 정적 자산). 배포: cd site && npx wrangler deploy
+  "name": "classplayer",
+  "compatibility_date": "2026-11-13",
+  "assets": { "directory": "./public" }
+}

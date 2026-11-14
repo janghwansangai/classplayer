@@ -38,3 +38,5 @@
 - 알림(Toast)은 자기 스타일시트가 앱 QSS 를 덮으므로 버튼 색을 직접 지정한다. 다운로드 창 글은 ElideLabel(폭 고정, … 줄임).
 - PO 토큰: `vendor/yt_dlp_plugins`(bgutil-ytdlp-pot-provider-rs v0.8.1 플러그인, GPL-3.0) + 실행 파일 bgutil-pot(빌드 때 `packaging/fetch_bgutil.sh`/CI 가 SHA-256 고정으로 받아 bin/ → 번들). bootstrap.enable_po_token_plugin()이 실행 파일이 있을 때만 플러그인 폴더를 sys.path 에 넣는다. 평소 요청은 pot_extractor_args(enabled=False)로 없는 경로를 넘겨 플러그인을 꺼 두고, 403 재시도(FALLBACK_CLIENTS_POT: mweb → web_safari → web_embedded, 다운로드는 mweb/web_safari)에서만 켠다.
 - HTTPS: 앱이 직접 여는 연결(업데이트, 미리보기 시트, 검색 썸네일, SponsorBlock)은 bootstrap.https_open() → truststore(운영체제 인증서; 학교망 HTTPS 검사 인증서 포함), 실패 시 운영체제+certifi. v0.4.2 이하 번들에서 업데이트 확인이 CERTIFICATE_VERIFY_FAILED 로 실패한 사례가 있음(사용자 학교망 추정). 자가 점검 JSON 의 ssl/https_app/pot_cli 확인.
+
+- 소개·다운로드 사이트: `site/`(Cloudflare Workers 정적 자산, https://classplayer.janhan97.workers.dev). 배포는 `cd site && npx wrangler deploy`. 다운로드 버튼은 GitHub releases/latest/download/<파일명> 이라 릴리스 파일 이름을 바꾸면 사이트도 고칠 것.

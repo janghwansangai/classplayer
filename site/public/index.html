@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClassPlayer · 수업용 영상 플레이어</title>
+<meta name="description" content="광고 없이 유튜브 영상만, 360도 영상, 모든 코덱. 초등 수업을 위한 무료 영상 플레이어 (맥·윈도우·안드로이드).">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<meta property="og:title" content="ClassPlayer · 수업용 영상 플레이어">
+<meta property="og:description" content="광고 없이 유튜브 영상만, 360도 영상, 모든 코덱. 맥·윈도우·안드로이드 무료.">
+<meta property="og:image" content="screen-360.jpg">
+<style>
+  :root { --bg:#141518; --panel:#1b1c21; --raised:#26272e; --line:#2a2b31; --text:#e7e8ec; --muted:#9a9ca6; --amber:#f59e0b; --amber2:#fbbf24; }
+  * { box-sizing:border-box; }
+  html { scroll-behavior:smooth; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,"Apple SD Gothic Neo","Pretendard","Malgun Gothic",system-ui,sans-serif; line-height:1.6; }
+  a { color:var(--amber2); }
+  .wrap { max-width:1100px; margin:0 auto; padding:0 20px; }
+  header { position:sticky; top:0; z-index:5; background:rgba(20,21,24,.88); backdrop-filter:blur(10px); border-bottom:1px solid var(--line); }
+  header .wrap { display:flex; align-items:center; gap:12px; height:60px; }
+  .brand { display:flex; align-items:center; gap:10px; font-weight:800; font-size:17px; color:var(--text); text-decoration:none; }
+  .brand img { width:30px; height:30px; border-radius:8px; }
+  nav { margin-left:auto; display:flex; gap:18px; font-size:14px; }
+  nav a { color:var(--muted); text-decoration:none; }
+  nav a:hover { color:var(--text); }
+  .hero { padding:72px 0 40px; text-align:center; }
+  .hero h1 { font-size:clamp(30px,5vw,50px); line-height:1.25; margin:0 0 16px; letter-spacing:-.5px; }
+  .hero h1 em { font-style:normal; color:var(--amber); }
+  .hero p { color:var(--muted); font-size:clamp(15px,2vw,18px); max-width:680px; margin:0 auto 28px; }
+  .cta { display:flex; gap:12px; justify-content:center; flex-wrap:wrap; }
+  .btn { display:inline-flex; align-items:center; gap:8px; padding:12px 20px; border-radius:12px; background:var(--raised); color:var(--text); text-decoration:none; font-weight:700; border:1px solid var(--line); }
+  .btn:hover { background:#30313a; }
+  .btn.primary { background:var(--amber); color:#1b1206; border-color:var(--amber); }
+  .btn.primary:hover { background:var(--amber2); }
+  .shot { margin:44px auto 0; max-width:1000px; border-radius:16px; overflow:hidden; border:1px solid var(--line); box-shadow:0 30px 80px rgba(0,0,0,.5); }
+  .shot img { display:block; width:100%; height:auto; }
+  section { padding:64px 0; }
+  h2 { font-size:clamp(24px,3.4vw,32px); margin:0 0 8px; text-align:center; }
+  .sub { color:var(--muted); text-align:center; margin:0 0 36px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:16px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:20px; }
+  .card h3 { margin:0 0 6px; font-size:17px; }
+  .card p { margin:0; color:var(--muted); font-size:14.5px; }
+  .ic { width:38px; height:38px; border-radius:10px; background:#3b2f12; color:var(--amber2); display:grid; place-items:center; margin-bottom:12px; }
+  .ic svg { width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:1.9; stroke-linecap:round; stroke-linejoin:round; }
+  .dl { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:16px; }
+  .dl .card { display:flex; flex-direction:column; gap:12px; }
+  .dl .card .os { font-size:13px; color:var(--muted); }
+  .dl .card .btn { justify-content:center; }
+  .dl ol { margin:0; padding-left:20px; color:var(--muted); font-size:14px; }
+  .dl .alt { font-size:13px; color:var(--muted); }
+  .two { display:grid; grid-template-columns:1fr 1fr; gap:28px; align-items:center; }
+  .two img { width:100%; border-radius:14px; border:1px solid var(--line); }
+  .two ul { color:var(--muted); padding-left:20px; }
+  .two li { margin:6px 0; }
+  details { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 18px; margin:10px 0; }
+  summary { cursor:pointer; font-weight:700; }
+  details p { color:var(--muted); margin:10px 0 0; }
+  kbd { background:var(--raised); border:1px solid var(--line); border-radius:6px; padding:1px 6px; font-size:13px; }
+  footer { border-top:1px solid var(--line); padding:28px 0 40px; color:var(--muted); font-size:13px; text-align:center; }
+  @media (max-width:760px) { .two { grid-template-columns:1fr; } nav { display:none; } }
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <a class="brand" href="#"><img src="icon.svg" alt="">ClassPlayer</a>
+  <nav><a href="#features">기능</a><a href="#record">녹화</a><a href="#download">다운로드</a><a href="#faq">자주 묻는 질문</a></nav>
+  <a class="btn primary" href="#download" style="padding:8px 14px;font-size:14px">다운로드</a>
+</div></header>
+
+<main>
+<div class="wrap hero">
+  <h1>광고 없이, <em>영상만</em>.<br>수업을 위한 영상 플레이어</h1>
+  <p>유튜브 링크를 붙여 넣으면 광고와 추천 화면 없이 영상만 나옵니다. 360도 영상, 4K·8K, 모든 코덱을 따로 설치할 것 없이 재생합니다. 맥·윈도우·안드로이드 모두 무료입니다.</p>
+  <div class="cta">
+    <a class="btn primary" href="#download">무료로 내려받기</a>
+    <a class="btn" href="https://github.com/janghwansangai/classplayer">소스 코드 (GitHub)</a>
+  </div>
+  <div class="shot"><img src="screen-360.jpg" alt="ClassPlayer 화면: 왼쪽 라이브러리, 가운데 360도 영상, 아래 조작 막대" width="1600" height="983"></div>
+</div>
+
+<section id="features"><div class="wrap">
+  <h2>수업에 필요한 것만 담았습니다</h2>
+  <p class="sub">교실 TV·전자칠판에서 바로 쓰도록 만들었습니다.</p>
+  <div class="grid">
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/><path d="M9 12l2 2 4-4"/></svg></div><h3>광고 없는 유튜브</h3><p>광고, 추천 영상, 댓글 없이 영상만 재생합니다. 협찬 구간도 자동으로 건너뜁니다.</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg></div><h3>링크 입력칸에서 바로 검색</h3><p>"곰 세 마리 동요"처럼 제목을 쓰고 Enter. 결과를 누르면 바로 재생됩니다.</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></svg></div><h3>360도 영상</h3><p>마우스로 끌어 둘러보고 휠로 확대합니다. 유튜브 360, 인스타360(insv), DJI 360(OSV) 원본도 엽니다.</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg></div><h3>수업 전에 미리 받기</h3><p>유튜브 영상을 파일로 받아 두면 인터넷이 느린 교실에서도 끊기지 않습니다. 자막도 함께 저장합니다.</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 12h4M7 15h7M13 12h4"/></svg></div><h3>모든 코덱, 4K·8K</h3><p>HEVC(H.265), AV1, VP9 등 코덱 설치 없이 재생합니다. 하드웨어 디코딩으로 4K60도 부드럽습니다.</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></div><h3>영상 라이브러리</h3><p>수업 자료 폴더를 등록하면 썸네일과 함께 모아 보여 주고, 이름으로 찾을 수 있습니다.</p></div>
+  </div>
+</div></section>
+
+<section id="record" style="background:#17181c;border-top:1px solid var(--line);border-bottom:1px solid var(--line)"><div class="wrap two">
+  <div>
+    <h2 style="text-align:left">필요한 장면만 녹화·녹음</h2>
+    <p style="color:var(--muted)">보고 있는 영상의 전체나 일부 구간을 파일로 저장합니다. 저장한 파일은 인터넷 없이도 라이브러리의 '녹화·녹음' 목록에서 바로 재생됩니다.</p>
+    <ul>
+      <li>탐색 막대를 <kbd>Shift</kbd>+드래그하면 그 구간이 바로 지정됩니다.</li>
+      <li>영상(MP4) 또는 소리만(MP3)으로 저장합니다.</li>
+      <li>유튜브 영상은 그 부분만 받아 옵니다.</li>
+      <li>저장 폴더는 '파일 › 저장 폴더 열기'로 바로 열립니다.</li>
+    </ul>
+  </div>
+  <img src="screen-record.jpg" alt="녹화·녹음 창: 영상 녹화/소리만 녹음, 전체/구간, 시작·끝 시간" width="1000" height="786" loading="lazy">
+</div></section>
+
+<section id="download"><div class="wrap">
+  <h2>무료 다운로드</h2>
+  <p class="sub">항상 최신 버전이 받아집니다. 설치한 뒤에는 앱 안의 '업데이트 확인'으로 새 버전을 받을 수 있습니다.</p>
+  <div class="dl">
+    <div class="card">
+      <h3>맥 (Mac)</h3>
+      <div class="os">Apple 실리콘(M1 이후) · macOS 12 이상</div>
+      <a class="btn primary" href="https://github.com/janghwansangai/classplayer/releases/latest/download/ClassPlayer-mac-arm64.dmg">맥용 내려받기 (.dmg)</a>
+      <ol>
+        <li>받은 파일을 열고 ClassPlayer를 '응용 프로그램'으로 끌어다 놓습니다.</li>
+        <li>처음 한 번은 응용 프로그램 폴더에서 ClassPlayer를 <b>오른쪽 클릭 › 열기</b>를 누릅니다.</li>
+      </ol>
+    </div>
+    <div class="card">
+      <h3>윈도우 (Windows)</h3>
+      <div class="os">Windows 10·11 (64비트) · 관리자 권한 필요 없음</div>
+      <a class="btn primary" href="https://github.com/janghwansangai/classplayer/releases/latest/download/ClassPlayer-Setup-windows-x64.exe">윈도우용 내려받기 (설치 프로그램)</a>
+      <ol>
+        <li>받은 설치 프로그램을 실행합니다. 시작 메뉴와 바탕화면에 등록됩니다.</li>
+        <li>"Windows의 PC 보호" 창이 뜨면 <b>추가 정보 › 실행</b>을 누릅니다.</li>
+      </ol>
+      <div class="alt">설치 없이 쓰려면 <a href="https://github.com/janghwansangai/classplayer/releases/latest/download/ClassPlayer-windows-x64.zip">압축 파일(.zip)</a></div>
+    </div>
+    <div class="card">
+      <h3>안드로이드</h3>
+      <div class="os">휴대폰·태블릿 · 재생목록, 소리만 재생</div>
+      <a class="btn primary" href="https://github.com/janghwansangai/classplayer-android/releases/latest/download/app-release.apk">안드로이드용 내려받기 (.apk)</a>
+      <ol>
+        <li>폰에서 이 페이지를 열고 받은 파일을 누릅니다.</li>
+        <li>"알 수 없는 앱 설치"를 허용하라는 창이 뜨면 허용합니다.</li>
+      </ol>
+    </div>
+  </div>
+</div></section>
+
+<section id="faq" style="padding-top:20px"><div class="wrap" style="max-width:800px">
+  <h2>자주 묻는 질문</h2>
+  <p class="sub">더 궁금한 점이나 오류는 앱의 '도움말 › 오류 신고'로 알려 주세요.</p>
+  <details><summary>정말 무료인가요?</summary><p>네. 회원 가입이나 결제 없이 쓸 수 있고, 소스 코드도 GitHub에 공개되어 있습니다.</p></details>
+  <details><summary>유튜브 영상이 열리지 않아요.</summary><p>유튜브가 일부 영상(특히 어린이용 영상)의 앱 재생을 막는 경우가 있습니다. 앱이 다른 방법으로 다시 시도하고, 그래도 안 되면 '유튜브에서 열기' 버튼을 보여 줍니다. 수업 전에 '미리 받기'로 파일을 받아 두면 가장 확실합니다.</p></details>
+  <details><summary>처음 유튜브 영상을 열 때 몇 초 걸려요.</summary><p>유튜브 주소를 확인하는 데 3초 안팎이 걸립니다. 한 번 연 영상은 주소를 저장해 두기 때문에 다음부터는 1초 안에 나옵니다. 수업 전에 한 번 열어 두면 수업 중에는 바로 재생됩니다.</p></details>
+  <details><summary>맥에서 "확인되지 않은 개발자" 경고가 나와요.</summary><p>응용 프로그램 폴더에서 ClassPlayer를 오른쪽 클릭하고 '열기'를 누르면 됩니다. 처음 한 번만 하면 됩니다.</p></details>
+  <details><summary>기본 영상 플레이어로 쓸 수 있나요?</summary><p>윈도우에서는 앱의 '설정 › 기본 영상 플레이어로 등록'을 누르세요. 맥에서는 영상 파일을 오른쪽 클릭 › 정보 가져오기 › 다음으로 열기에서 ClassPlayer를 고르고 '모두 변경'을 누르세요.</p></details>
+</div></section>
+</main>
+
+<footer><div class="wrap">
+  ClassPlayer · 초등 수업을 위해 만든 영상 플레이어 ·
+  <a href="https://github.com/janghwansangai/classplayer">GitHub</a> ·
+  <a href="https://github.com/janghwansangai/classplayer/releases">모든 버전</a>
+  <div style="margin-top:6px">mpv, FFmpeg, yt-dlp 등 공개 소프트웨어를 사용합니다. YouTube는 Google LLC의 상표입니다.</div>
+</div></footer>
+</body>
+</html>
