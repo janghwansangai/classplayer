@@ -190,9 +190,11 @@ class MpvWidget(QOpenGLWidget):
         self.pause_changed.emit(False)
 
     def play_stream(self, video_url: str, audio_url: str = "", *, title: str = "", user_agent: str = "",
-                    subtitles: list[tuple[str, str, str]] | None = None) -> None:
+                    subtitles: list[tuple[str, str, str]] | None = None, start: float = 0.0) -> None:
         """앱에서 직접 푼 스트림 주소 재생. 영상/소리가 따로 오면 audio-files 로 합친다."""
         self._reset_stream_options()
+        if start > 0:
+            self.mpv["start"] = f"{start:.1f}"     # 링크의 &t=23s 같은 시작 위치
         self.mpv["ytdl"] = False
         if audio_url:
             self.mpv["audio-files"] = [audio_url]
@@ -234,6 +236,7 @@ class MpvWidget(QOpenGLWidget):
             self.mpv["ytdl"] = True
             self.mpv["audio-files"] = []
             self.mpv["force-media-title"] = ""
+            self.mpv["start"] = "none"
         except Exception:  # noqa: BLE001
             pass
 

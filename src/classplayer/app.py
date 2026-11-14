@@ -30,11 +30,12 @@ from classplayer.player.thumbnails import ThumbnailProvider
 from classplayer.player.controls import fmt_time
 from classplayer.settings import Settings
 from classplayer.ui.theme import AMBER, QSS, apply_palette
-from classplayer.youtube.common import is_url, is_youtube_url, youtube_video_id
+from classplayer.youtube.common import is_url, is_youtube_url, start_seconds, youtube_video_id
 from classplayer.youtube.download import PRESETS, DownloadJob, DownloadRequest
 from classplayer.youtube.probe import probe_spherical
+from classplayer.youtube.search import SearchResult, YouTubeSearcher, fmt_views
 from classplayer.youtube.sponsorblock import SponsorSkipper
-from classplayer.youtube.stream import StreamResolver
+from classplayer.youtube.stream import FALLBACK_CLIENTS, StreamResolver
 
 HELP_TEXT = """\
 Space  재생/일시정지        ←/→  10초 이동 (Shift: 60초)
@@ -112,25 +113,76 @@ class DownloadDialog(QDialog):
         )
 
 
+def reveal_in_folder(path: str) -> None:
+    """파일이 있는 폴더를 열고 그 파일을 선택해 보여 준다 (Finder / 탐색기)."""
+    import subprocess
+    p = Path(path)
+    try:
+        if sys.platform == "darwin" and p.exists():
+            subprocess.Popen(["open", "-R", str(p)])
+            return
+        if sys.platform.startswith("win") and p.exists():
+            subprocess.Popen(["explorer", "/select,", str(p)])
+            return
+    except Exception:  # noqa: BLE001
+        pass
+    folder = p if p.is_dir() else p.parent
+    QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+
+
+class ElideLabel(QLabel):
+    """창 폭보다 긴 글은 끝을 '…'로 줄여 보여 주는 라벨 (전체 글은 툴팁). 패널 폭을 밀어내지 않는다."""
+
+    def __init__(self, text: str = "", parent=None) -> None:
+        super().__init__(parent)
+        self._full = ""
+        self.setMinimumWidth(10)
+        from PySide6.QtWidgets import QSizePolicy
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setText(text)
+
+    def setText(self, text: str) -> None:  # noqa: N802
+        self._full = text or ""
+        self.setToolTip(self._full)
+        self._update()
+
+    def full_text(self) -> str:
+        return self._full
+
+    def resizeEvent(self, e) -> None:  # noqa: N802
+        super().resizeEvent(e)
+        self._update()
+
+    def _update(self) -> None:
+        w = max(10, self.width())
+        super().setText(self.fontMetrics().elidedText(self._full, Qt.TextElideMode.ElideRight, w))
+
+
 class DownloadItem(QWidget):
     play_requested = Signal(str)
 
     def __init__(self, job: DownloadJob, parent=None) -> None:
         super().__init__(parent)
         self.job = job
-        self.title = QLabel(getattr(job, "display", "") or job.req.url)
-        self.title.setWordWrap(True)
+        self.title = ElideLabel(getattr(job, "display", "") or job.req.url)
         self.bar = QProgressBar()
         self.bar.setRange(0, 1000)
-        self.status = QLabel("대기 중")
+        self.status = ElideLabel("대기 중")
         self.status.setObjectName("muted")
         self.btn = QToolButton()
         self.btn.setText("취소")
         self.btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.btn.clicked.connect(self._on_btn)
+        self.btn_folder = QToolButton()
+        self.btn_folder.setText("폴더")
+        self.btn_folder.setToolTip("저장한 파일을 폴더에서 보기")
+        self.btn_folder.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_folder.clicked.connect(lambda: reveal_in_folder(self._path))
+        self.btn_folder.hide()
         row = QHBoxLayout()
         row.addWidget(self.bar, 1)
         row.addWidget(self.btn)
+        row.addWidget(self.btn_folder)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(6, 4, 6, 4)
         lay.addWidget(self.title)
@@ -153,6 +205,7 @@ class DownloadItem(QWidget):
             self.bar.setValue(1000)
             self.status.setText("완료: " + Path(path).name)
             self.btn.setText("재생")
+            self.btn_folder.show()
         else:
             self.btn.setText("닫기")
 
@@ -182,12 +235,15 @@ class DownloadPanel(QWidget):
         self.inner_lay.addStretch(1)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setWidget(self.inner)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(500)
         self.log.setPlaceholderText("yt-dlp 메시지")
         self.log.setMaximumHeight(120)
+        self.log.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.log.setMinimumWidth(10)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(scroll, 1)
@@ -268,11 +324,15 @@ class Toast(QFrame):
     def __init__(self, parent) -> None:
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setStyleSheet("Toast { background: #101114; border: 1px solid #2a2b31; border-radius: 10px; }")
+        self.setStyleSheet("Toast { background: #101114; border: 1px solid #3a3b44; border-radius: 10px; }")
         self.label = QLabel("")
-        self.label.setStyleSheet("color: #e7e8ec; font-size: 13px; border: none;")
+        self.label.setStyleSheet("color: #e7e8ec; font-size: 13px; border: none; background: transparent;")
         self.btn = QPushButton("")
         self.btn.setObjectName("toastbtn")
+        # 알림 창 스타일이 앱 테마를 덮어쓰므로 버튼 색을 직접 지정 (어두운 바탕에서도 잘 보이게)
+        self.btn.setStyleSheet("QPushButton { background: #f59e0b; color: #1b1206; font-weight: 700; border: none;"
+                               " border-radius: 8px; min-height: 28px; padding: 0 12px; }"
+                               "QPushButton:hover { background: #fbbf24; }")
         self.btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.btn.hide()
         lay = QHBoxLayout(self)
@@ -344,6 +404,128 @@ class ClipboardBanner(QFrame):
         short = url if len(url) < 70 else url[:67] + "…"
         self.label.setText(f"복사해 둔 유튜브 링크가 있습니다: {short}")
         self.show()
+
+
+class SearchPanel(QFrame):
+    """링크 입력칸 아래에 뜨는 유튜브 검색 결과. 누르면 재생, 오른쪽 클릭으로 미리 받기·링크 복사."""
+
+    play_requested = Signal(str, str)        # url, 제목
+    download_requested = Signal(str)
+    closed = Signal()
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("searchpanel")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.head = QLabel("")
+        self.head.setObjectName("muted")
+        b_close = QToolButton()
+        b_close.setText("✕")
+        b_close.setAutoRaise(True)
+        b_close.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        b_close.setToolTip("닫기 (Esc)")
+        b_close.clicked.connect(self.close_panel)
+        top = QHBoxLayout()
+        top.setContentsMargins(4, 0, 0, 0)
+        top.addWidget(self.head, 1)
+        top.addWidget(b_close)
+        from PySide6.QtWidgets import QListWidget
+        self.list = QListWidget()
+        self.list.setObjectName("searchlist")
+        self.list.setIconSize(QSize(128, 72))
+        self.list.setSpacing(2)
+        self.list.setUniformItemSizes(True)
+        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.list.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.list.itemClicked.connect(self._activate)
+        self.list.itemActivated.connect(self._activate)
+        self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(self._menu)
+        self.list.installEventFilter(self)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 8, 10, 10)
+        lay.setSpacing(6)
+        lay.addLayout(top)
+        lay.addWidget(self.list, 1)
+        self._items: dict[str, object] = {}
+        self.hide()
+
+    def show_loading(self, query: str) -> None:
+        self.head.setText(f"‘{query}’ 유튜브에서 찾는 중…")
+        self.list.clear()
+        self._items.clear()
+        self.show()
+        self.raise_()
+
+    def show_error(self, query: str, msg: str) -> None:
+        self.head.setText(f"‘{query}’ 검색에 실패했습니다: {msg}")
+
+    def show_results(self, query: str, results: list) -> None:
+        from PySide6.QtWidgets import QListWidgetItem
+        self.list.clear()
+        self._items.clear()
+        self.head.setText(f"‘{query}’ 유튜브 검색 결과 {len(results)}개 · 누르면 재생, 오른쪽 클릭은 미리 받기"
+                          if results else f"‘{query}’ 검색 결과가 없습니다")
+        ph = icons.pixmap("play", "#5b5e69", 22)
+        for r in results:
+            meta = " · ".join(x for x in (r.channel, "실시간" if r.is_live else (fmt_time(r.duration) if r.duration else ""),
+                                          fmt_views(r.views)) if x)
+            it = QListWidgetItem(QIcon(ph), f"{r.title}\n{meta}")
+            it.setData(Qt.ItemDataRole.UserRole, r)
+            it.setToolTip(r.title)
+            it.setSizeHint(QSize(0, 80))
+            self.list.addItem(it)
+            self._items[r.video_id] = it
+        if results:
+            self.list.setCurrentRow(0)
+        self.show()
+        self.raise_()
+
+    def set_thumb(self, vid: str, data: bytes) -> None:
+        it = self._items.get(vid)
+        if it is None:
+            return
+        from PySide6.QtGui import QPixmap
+        pm = QPixmap()
+        if pm.loadFromData(data):
+            it.setIcon(QIcon(pm.scaled(256, 144, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                                       Qt.TransformationMode.SmoothTransformation)))
+
+    def _activate(self, it) -> None:
+        r = it.data(Qt.ItemDataRole.UserRole)
+        if r is not None:
+            self.close_panel()
+            self.play_requested.emit(r.url, r.title)
+
+    def _menu(self, pos) -> None:
+        it = self.list.itemAt(pos)
+        if it is None:
+            return
+        r = it.data(Qt.ItemDataRole.UserRole)
+        from PySide6.QtWidgets import QMenu
+        m = QMenu(self)
+        a_play = m.addAction("재생")
+        a_dl = m.addAction("미리 받기 (파일로 저장)…")
+        a_copy = m.addAction("링크 복사")
+        a = m.exec(self.list.viewport().mapToGlobal(pos))
+        if a is a_play:
+            self._activate(it)
+        elif a is a_dl:
+            self.close_panel()
+            self.download_requested.emit(r.url)
+        elif a is a_copy:
+            QApplication.clipboard().setText(r.url)
+
+    def close_panel(self) -> None:
+        if self.isVisible():
+            self.hide()
+            self.closed.emit()
+
+    def eventFilter(self, obj, e) -> bool:  # noqa: N802
+        if obj is self.list and e.type() == QEvent.Type.KeyPress and e.key() == Qt.Key.Key_Escape:
+            self.close_panel()
+            return True
+        return super().eventFilter(obj, e)
 
 
 class Compass(QWidget):
@@ -525,6 +707,14 @@ class RecordDialog(QDialog):
     def set_position_source(self, fn) -> None:
         self._pos_fn = fn
 
+    def set_range(self, a: float | None, b: float | None) -> None:
+        """탐색바에서 정한 구간을 시간 칸에 반영."""
+        self.r_part.setChecked(True)
+        if a is not None:
+            self.t_start.set_seconds(a)
+        if b is not None:
+            self.t_end.set_seconds(b)
+
     def set_start_now(self) -> None:
         if self._pos_fn:
             self.r_part.setChecked(True)
@@ -622,7 +812,7 @@ class MainWindow(QMainWindow):
         brand.setObjectName("brand")
         self.url_edit = QLineEdit()
         self.url_edit.setObjectName("url")
-        self.url_edit.setPlaceholderText("유튜브 링크를 붙여넣거나 파일을 끌어다 놓으세요 (Enter로 재생)")
+        self.url_edit.setPlaceholderText("유튜브 링크를 붙여넣거나, 노래·영상 제목을 쓰고 Enter (유튜브 검색)")
         self.url_edit.setClearButtonEnabled(True)
         self.url_edit.addAction(QIcon(icons.pixmap("link", "#8b8e99", 16)), QLineEdit.ActionPosition.LeadingPosition)
         self.url_edit.returnPressed.connect(self.play_from_url_bar)
@@ -710,6 +900,7 @@ class MainWindow(QMainWindow):
         self.library = LibraryPanel(self.settings.library_folders, [self.settings.download_dir],
                                     ffmpeg=self.ffmpeg, ffprobe=self.ffprobe)
         self.library.play_requested.connect(self.open_target)
+        self.library.open_saved_requested.connect(self.open_save_folder)
         self.library.folders_changed.connect(lambda f: setattr(self.settings, "library_folders", f))
         self.dock_library = QDockWidget("라이브러리", self)
         self.dock_library.setObjectName("dock_library")
@@ -770,6 +961,17 @@ class MainWindow(QMainWindow):
         QApplication.instance().applicationStateChanged.connect(self._on_app_state)
         QApplication.clipboard().dataChanged.connect(self._check_clipboard)
 
+        # --- 유튜브 검색
+        self.searcher = YouTubeSearcher(self)
+        self.search_panel = SearchPanel(self)
+        self.searcher.results.connect(self._on_search_results)
+        self.searcher.failed.connect(lambda q, m: self.search_panel.show_error(q, m))
+        self.searcher.thumb.connect(self.search_panel.set_thumb)
+        self.search_panel.play_requested.connect(self._play_search_result)
+        self.search_panel.download_requested.connect(self._download_search_result)
+        self.search_panel.closed.connect(lambda: self.url_edit.setFocus())
+        self.url_edit.installEventFilter(self)
+
         # --- 녹화 · 업데이트
         self._rec_dialog: RecordDialog | None = None
         self.updater = Updater(self)
@@ -823,6 +1025,8 @@ class MainWindow(QMainWindow):
         c.fullscreen_clicked.connect(self.toggle_fullscreen)
         c.screenshot_clicked.connect(self.take_screenshot)
         c.record_clicked.connect(self.open_record_dialog)
+        c.range_edited.connect(self._on_range_edited)
+        c.range_context.connect(self._on_range_context)
         c.audio_only_toggled.connect(lambda on: self.a_audio_only.setChecked(on))
         c.speed_changed.connect(self._show_speed_hud)
 
@@ -847,6 +1051,8 @@ class MainWindow(QMainWindow):
         self.m_recent = m_file.addMenu("최근 항목")
         self.m_recent.aboutToShow.connect(self._fill_recent)
         m_file.addSeparator()
+        act(m_file, "저장 폴더 열기 (녹화·녹음·미리 받기)", self.open_save_folder, "Ctrl+Shift+O")
+        act(m_file, "캡처 폴더 열기", lambda: self._open_folder(Path(self.settings.capture_dir)))
         act(m_file, "라이브러리 폴더 추가…", self.library.add_folder_dialog)
         act(m_file, "종료", self.close, "Ctrl+Q")
 
@@ -930,9 +1136,48 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ 열기/재생
     def play_from_url_bar(self) -> None:
         text = self.url_edit.text().strip()
-        if text:
-            self.open_target(text)
+        if not text:
+            return
+        if self._is_search_text(text):
+            self.search_youtube(text)
+            return
+        self.open_target(text)
         self.player.setFocus()
+
+    # ------------------------------------------------------------------ 유튜브 검색
+    @staticmethod
+    def _is_search_text(text: str) -> bool:
+        t = text.strip()
+        return bool(t) and not is_url(t) and not Path(os.path.expanduser(t)).exists()
+
+    def search_youtube(self, query: str) -> None:
+        self.search_panel.show_loading(query)
+        self._place_search_panel()
+        self.searcher.search(query)
+
+    def _on_search_results(self, query: str, results) -> None:
+        self.search_panel.show_results(query, results)
+        self._place_search_panel()
+        self.search_panel.list.setFocus()
+
+    def _place_search_panel(self) -> None:
+        sp = self.search_panel
+        if not sp.isVisible():
+            return
+        tl = self.url_edit.mapTo(self, QPoint(0, self.url_edit.height() + 6))
+        w = max(560, self.url_edit.width())
+        x = min(tl.x(), max(0, self.width() - w - 8))
+        h = min(620, max(240, self.height() - tl.y() - 40))
+        sp.setGeometry(x, tl.y(), min(w, self.width() - 16), h)
+        sp.raise_()
+
+    def _play_search_result(self, url: str, title: str) -> None:
+        self.open_target(url)
+        self.player.setFocus()
+
+    def _download_search_result(self, url: str) -> None:
+        self.url_edit.setText(url)
+        self.open_download_dialog()
 
     def open_file_dialog(self) -> None:
         exts = " ".join(f"*{e}" for e in sorted(MEDIA_EXTENSIONS))
@@ -957,6 +1202,11 @@ class MainWindow(QMainWindow):
         self._last_clip = QApplication.clipboard().text().strip()
         self.set_vr(False)
         self.settings.add_recent(target)
+        self.search_panel.close_panel()
+        self._client_step = 0
+        self._awaiting_resolve = False
+        self._mpv_fallback = False
+        self._refetching = False
         if self._current_is_youtube:
             self.lbl_title.setText("유튜브 정보 가져오는 중…")
             self.resolver.resolve(target)
@@ -1047,11 +1297,12 @@ class MainWindow(QMainWindow):
     def _on_stream_resolved(self, rs) -> None:
         if rs.url != self._current:
             return
+        self._awaiting_resolve = False
         how = "저장해 둔 주소" if self.resolver.last_from_cache else f"주소 확인 {self.resolver.last_seconds:.1f}초"
         self.statusBar().showMessage(f"유튜브: {how}", 6000)
         self._show_loading("영상을 불러오는 중…")
         self.player.play_stream(rs.video_url, rs.audio_url, title=rs.title, user_agent=rs.user_agent,
-                                subtitles=rs.subtitles)
+                                subtitles=rs.subtitles, start=start_seconds(rs.url))
         self._on_title(rs.title)
         if rs.storyboards:
             self.thumbs.load_storyboard(rs.storyboards)
@@ -1062,10 +1313,12 @@ class MainWindow(QMainWindow):
     def _on_stream_failed(self, url: str, message: str) -> None:
         if url != self._current:
             return
+        self._awaiting_resolve = False
         # 앱 내부 풀기에 실패하면 mpv 가 직접 연다 (일반 영상 주소, 내장 ytdl 훅)
         if self._current_is_youtube:
             self.notify(f"유튜브 주소를 풀지 못했습니다 ({message}). 다른 방식으로 다시 시도합니다", 8000)
         self._show_loading("영상을 여는 중…")
+        self._mpv_fallback = True
         self.player.play(url)
         if self._current_is_youtube:
             self._retry_storyboard(url)
@@ -1093,19 +1346,33 @@ class MainWindow(QMainWindow):
 
     def _on_load_failed(self, err: int) -> None:
         cur = self._current
-        if not cur:
-            return
+        if not cur or getattr(self, "_awaiting_resolve", False):
+            return      # 새 주소를 받는 중에 온 (이전 시도의) 실패 알림은 무시
         if self._current_is_youtube and self.resolver.last_from_cache and not getattr(self, "_refetching", False):
             # 저장해 둔 주소가 거절됨 (인터넷 연결이 바뀌었거나 만료) → 버리고 새로 받는다
             self._refetching = True
             self.resolver.forget(cur)
             self.resolver.last_from_cache = False
             self._show_loading("저장해 둔 주소가 만료되어 새로 확인하는 중…")
+            self._awaiting_resolve = True
             self.resolver.resolve(cur)
+            return
+        step = getattr(self, "_client_step", 0)
+        if self._current_is_youtube and step < len(FALLBACK_CLIENTS) and not getattr(self, "_mpv_fallback", False):
+            # 어린이용 영상 등은 기본 방식 주소가 403 으로 막힌다 → 다른 방식으로 다시 받는다
+            self._client_step = step + 1
+            self.resolver.forget(cur)
+            self._show_loading(f"다른 방법으로 다시 여는 중… ({step + 1}/{len(FALLBACK_CLIENTS)})")
+            self._awaiting_resolve = True
+            self.resolver.resolve(cur, clients=FALLBACK_CLIENTS[step])
             return
         self._refetching = False
         self.loading.hide()
-        self.notify("영상을 열지 못했습니다. 인터넷 연결이나 파일을 확인해 주세요", 7000)
+        if self._current_is_youtube:
+            self.notify("유튜브가 이 영상의 앱 재생을 막았습니다 (어린이용 영상 등)", 15000,
+                        "유튜브에서 열기", lambda u=cur: QDesktopServices.openUrl(QUrl(u)))
+        else:
+            self.notify("영상을 열지 못했습니다. 인터넷 연결이나 파일을 확인해 주세요", 7000)
 
     def _probe_local(self, path: str) -> None:
         ffprobe = self.ffprobe
@@ -1173,8 +1440,14 @@ class MainWindow(QMainWindow):
 
     def _on_url_typed(self, text: str) -> None:
         t = text.strip()
+        prev = getattr(self, "_url_prev_text", "")
+        self._url_prev_text = t
         if is_youtube_url(t):
             self.resolver.prefetch(t)
+        # 입력칸에 링크를 붙여넣은 경우(한 번에 긴 글이 들어옴)는 바로 재생한다
+        pasted = len(t) - len(prev) > 10 and t == QApplication.clipboard().text().strip()
+        if pasted and is_url(t) and t != self._current:
+            QTimer.singleShot(0, lambda u=t: self.open_target(u))
 
     # ------------------------------------------------------------------ 녹화 · 녹음
     def _record_source(self) -> tuple[str, bool]:
@@ -1211,6 +1484,39 @@ class MainWindow(QMainWindow):
         self._rec_dialog = dlg
         dlg.show()
         dlg._changed()
+
+    def _on_range_edited(self, a: float, b: float) -> None:
+        if self._rec_dialog is None:
+            self.open_record_dialog()
+        if self._rec_dialog is not None:
+            self._rec_dialog.set_range(a, b)
+
+    def _on_range_context(self, t: float, pos) -> None:
+        from PySide6.QtWidgets import QMenu
+        if not self._current:
+            return
+        m = QMenu(self)
+        a_s = m.addAction(f"여기({fmt_time(t)})를 녹화 시작으로")
+        a_e = m.addAction(f"여기({fmt_time(t)})를 녹화 끝으로")
+        m.addSeparator()
+        a_go = m.addAction("이 위치로 이동")
+        a = m.exec(pos)
+        if a is a_go:
+            self.player.seek_absolute(t)
+            return
+        if a not in (a_s, a_e):
+            return
+        if self._rec_dialog is None:
+            self.open_record_dialog()
+        d = self._rec_dialog
+        if d is None:
+            return
+        if a is a_s:
+            end = d.t_end.seconds()
+            d.set_range(t, end if end > t else t + 30)
+        else:
+            start = d.t_start.seconds()
+            d.set_range(start if start < t else max(0.0, t - 30), t)
 
     def _mark_now(self, start: bool) -> None:
         if self._rec_dialog is None:
@@ -1250,7 +1556,17 @@ class MainWindow(QMainWindow):
         if not path:
             return
         self.library.rescan()
-        self.notify(f"저장했습니다: {Path(path).name}", 7000, "목록 보기", self.show_recordings)
+        self.notify(f"저장했습니다: {Path(path).name}", 8000, "폴더 열기", lambda p=path: reveal_in_folder(p))
+        self._last_saved = path
+
+    def open_save_folder(self) -> None:
+        d = Path(self.settings.download_dir)
+        d.mkdir(parents=True, exist_ok=True)
+        last = getattr(self, "_last_saved", "")
+        if last and Path(last).exists():
+            reveal_in_folder(last)
+        else:
+            self._open_folder(d)
 
     def show_recordings(self) -> None:
         self.dock_library.show()
@@ -1417,6 +1733,10 @@ class MainWindow(QMainWindow):
     def play_from_clipboard(self) -> None:
         text = QApplication.clipboard().text().strip()
         typed = self.url_edit.text().strip()
+        if typed and self._is_search_text(typed) and self.url_edit.hasFocus() or \
+                (typed and self._is_search_text(typed) and not is_url(text)):
+            self.search_youtube(typed)       # 입력칸에 검색어를 쓴 경우
+            return
         if is_url(text) or (text and Path(text).exists()):
             self.open_target(text)
         elif typed and typed != self._current and (is_url(typed) or Path(typed).exists()):
@@ -1750,7 +2070,12 @@ class MainWindow(QMainWindow):
             if isinstance(fw, (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox)) or \
                     (isinstance(fw, QComboBox) and fw.isEditable()):
                 if e.key() == Qt.Key.Key_Escape and fw is self.url_edit:
+                    if self.search_panel.isVisible():
+                        self.search_panel.close_panel()
                     self.player.setFocus()
+                    return True
+                if e.key() == Qt.Key.Key_Down and fw is self.url_edit and self.search_panel.isVisible():
+                    self.search_panel.list.setFocus()
                     return True
                 return False
             if self._handle_key(e):
@@ -1840,6 +2165,11 @@ class MainWindow(QMainWindow):
         elif md.hasText():
             self.open_target(md.text())
 
+    def resizeEvent(self, e) -> None:  # noqa: N802
+        super().resizeEvent(e)
+        if hasattr(self, "search_panel"):
+            self._place_search_panel()
+
     def closeEvent(self, e: QCloseEvent) -> None:
         self.downloads.cancel_all()
         self.settings.library_folders = self.library.folders
@@ -1891,6 +2221,11 @@ def _run_selftest(app: QApplication, win: "MainWindow", target: str) -> None:
         info["js_runtime"] = win.js_runtime
         info["bundled"] = bool(bootstrap.bundled_dir())
         info["libmpv"] = bootstrap.loaded_libmpv_path()
+        try:
+            import curl_cffi  # noqa: F401
+            info["curl_cffi"] = True
+        except Exception as e:  # noqa: BLE001
+            info["curl_cffi"] = f"error: {e}"
         try:
             from yt_dlp.downloader.external import FFmpegFD
             info["ytdlp_ffmpeg"] = bool(FFmpegFD.available())

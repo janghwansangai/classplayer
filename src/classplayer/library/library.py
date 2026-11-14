@@ -197,6 +197,7 @@ class LibraryThumbs:
 class LibraryPanel(QWidget):
     play_requested = Signal(str)
     folders_changed = Signal(list)
+    open_saved_requested = Signal()
 
     FILTERS = (("all", "전체"), ("360", "360°"), ("saved", "저장함"), ("rec", "녹화·녹음"))
 
@@ -260,6 +261,7 @@ class LibraryPanel(QWidget):
         self.btn_add = tbtn("plus", "폴더 추가", self.add_folder_dialog)
         self.btn_remove = tbtn("minus", "선택한 폴더 제거", self._remove_current_folder)
         self.btn_refresh = tbtn("refresh", "다시 훑기", self.rescan)
+        self.btn_open_saved = tbtn("folder", "저장 폴더 열기 (녹화·녹음·미리 받기)", lambda: self.open_saved_requested.emit())
         self.lbl_count = QLabel("")
         self.lbl_count.setObjectName("muted")
 
@@ -269,6 +271,7 @@ class LibraryPanel(QWidget):
         top.addWidget(self.btn_add)
         top.addWidget(self.btn_remove)
         top.addWidget(self.btn_refresh)
+        top.addWidget(self.btn_open_saved)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(10, 4, 10, 8)
         lay.setSpacing(8)

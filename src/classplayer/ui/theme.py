@@ -125,6 +125,11 @@ QLabel#loading {{ background: rgba(16,17,20,0.86); color: #ffffff; border: 1px s
 QLabel#hud {{ background: rgba(16,17,20,0.78); color: {TEXT}; border: 1px solid rgba(255,255,255,0.12); border-radius: 13px; padding: 4px 11px; font-size: 11.5px; }}
 QLabel#hudamber {{ background: rgba(16,17,20,0.78); color: {AMBER_HOVER}; border: 1px solid rgba(245,158,11,0.35); border-radius: 13px; padding: 4px 11px; font-size: 11.5px; font-weight: 600; }}
 QPushButton#toastbtn {{ background: {AMBER}; color: #1b1206; min-height: 26px; padding: 0 10px; border-radius: 8px; }}
+QFrame#searchpanel {{ background: {TOP}; border: 1px solid {LINE2}; border-radius: 14px; }}
+QListWidget#searchlist {{ background: transparent; border: none; outline: 0; }}
+QListWidget#searchlist::item {{ border-radius: 10px; padding: 4px 6px; color: {TEXT}; }}
+QListWidget#searchlist::item:hover {{ background: #24252c; }}
+QListWidget#searchlist::item:selected {{ background: {AMBER_DIM}; color: {TEXT}; }}
 QFrame#banner {{ background: #221c0e; border-bottom: 1px solid #4a3a12; }}
 QFrame#banner QLabel {{ color: {AMBER_HOVER}; }}
 """

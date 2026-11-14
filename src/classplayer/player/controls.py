@@ -25,26 +25,49 @@ class ClickSlider(QSlider):
     clicked_value = Signal(int)
     hovered = Signal(float, int)   # 비율(0..1), 슬라이더 안 x 좌표
     left = Signal()
+    marks_edited = Signal(float, float)      # 녹화 구간을 탐색바에서 직접 바꿈 (비율)
+    context_at = Signal(float, object)       # 오른쪽 클릭 위치(비율), 화면 좌표
 
     def __init__(self, orientation=Qt.Orientation.Horizontal, parent=None) -> None:
         super().__init__(orientation, parent)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setMouseTracking(True)
         self._marks: tuple[float, float] | None = None   # 녹화 구간 (0..1 비율)
+        self._mark_drag: str | None = None                # "a" | "b" | "new"
+        self._mark_anchor = 0.0
+        self.edit_marks = False      # 녹화 구간 편집 허용 (컨트롤바가 켬)
 
     def set_marks(self, a: float | None, b: float | None) -> None:
         """녹화할 구간을 홈 위에 빨간 띠로 표시한다. 둘 다 None 이면 지운다."""
         self._marks = None if a is None or b is None else (max(0.0, min(a, b)), min(1.0, max(a, b)))
         self.update()
 
+    def _groove(self):
+        opt = QStyleOptionSlider()
+        self.initStyleOption(opt)
+        return self.style().subControlRect(QStyle.ComplexControl.CC_Slider, opt,
+                                           QStyle.SubControl.SC_SliderGroove, self)
+
+    def _frac_at(self, x: float) -> float:
+        g = self._groove()
+        return min(1.0, max(0.0, (x - g.left()) / max(1, g.width())))
+
+    def _mark_x(self, frac: float) -> float:
+        g = self._groove()
+        return g.left() + frac * g.width()
+
+    def contextMenuEvent(self, e) -> None:  # noqa: N802
+        if self.edit_marks:
+            self.context_at.emit(self._frac_at(e.pos().x()), e.globalPos())
+            e.accept()
+            return
+        super().contextMenuEvent(e)
+
     def paintEvent(self, e) -> None:
         super().paintEvent(e)
         if not self._marks:
             return
-        opt = QStyleOptionSlider()
-        self.initStyleOption(opt)
-        groove = self.style().subControlRect(QStyle.ComplexControl.CC_Slider, opt,
-                                             QStyle.SubControl.SC_SliderGroove, self)
+        groove = self._groove()
         a, b = self._marks
         x0 = groove.left() + a * groove.width()
         x1 = groove.left() + b * groove.width()
@@ -60,13 +83,56 @@ class ClickSlider(QSlider):
     def mouseMoveEvent(self, e) -> None:
         frac = min(1.0, max(0.0, e.position().x() / max(1, self.width())))
         self.hovered.emit(frac, int(e.position().x()))
+        if self._mark_drag:
+            f = self._frac_at(e.position().x())
+            a, b = self._marks or (f, f)
+            if self._mark_drag == "a":
+                a = f
+            elif self._mark_drag == "b":
+                b = f
+            else:
+                a, b = sorted((self._mark_anchor, f))
+            self._marks = (min(a, b), max(a, b))
+            if self._mark_drag in ("a", "b") and a > b:      # 서로 넘어가면 잡은 쪽을 바꾼다
+                self._mark_drag = "b" if self._mark_drag == "a" else "a"
+            self.update()
+            self.marks_edited.emit(*self._marks)
+            return
+        if self.edit_marks and self._marks:
+            x = e.position().x()
+            near = any(abs(x - self._mark_x(m)) <= 6 for m in self._marks)
+            self.setCursor(Qt.CursorShape.SizeHorCursor if near else Qt.CursorShape.ArrowCursor)
         super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e) -> None:  # noqa: N802
+        if self._mark_drag:
+            self._mark_drag = None
+            if self._marks:
+                self.marks_edited.emit(*self._marks)
+            e.accept()
+            return
+        super().mouseReleaseEvent(e)
 
     def leaveEvent(self, e) -> None:
         self.left.emit()
         super().leaveEvent(e)
 
     def mousePressEvent(self, e) -> None:
+        if e.button() == Qt.MouseButton.LeftButton and self.edit_marks:
+            x = e.position().x()
+            if self._marks:
+                da, db = abs(x - self._mark_x(self._marks[0])), abs(x - self._mark_x(self._marks[1]))
+                if min(da, db) <= 6:
+                    self._mark_drag = "a" if da <= db else "b"
+                    e.accept()
+                    return
+            if e.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                self._mark_drag = "new"
+                self._mark_anchor = self._frac_at(x)
+                self._marks = (self._mark_anchor, self._mark_anchor)
+                self.update()
+                e.accept()
+                return
         if e.button() == Qt.MouseButton.LeftButton:
             frac = e.position().x() / max(1, self.width())
             value = int(self.minimum() + frac * (self.maximum() - self.minimum()))
@@ -91,6 +157,8 @@ class ControlBar(QWidget):
     screenshot_clicked = Signal()
     record_clicked = Signal()
     audio_only_toggled = Signal(bool)
+    range_edited = Signal(float, float)        # 탐색바에서 정한 녹화 구간 (초)
+    range_context = Signal(float, object)      # 오른쪽 클릭한 시각(초), 화면 좌표
     preview_hover = Signal(float, int)   # 초, 슬라이더 안 x
     preview_leave = Signal()
 
@@ -129,6 +197,10 @@ class ControlBar(QWidget):
         self.slider.clicked_value.connect(self._on_slider_clicked)
         self.slider.hovered.connect(lambda frac, x: self.preview_hover.emit(frac * self._duration, x))
         self.slider.left.connect(self.preview_leave)
+        self.slider.edit_marks = True
+        self.slider.setToolTip("Shift+드래그: 녹화 구간 정하기 · 오른쪽 클릭: 여기를 녹화 시작/끝으로")
+        self.slider.marks_edited.connect(lambda a, b: self.range_edited.emit(a * self._duration, b * self._duration))
+        self.slider.context_at.connect(lambda f, pos: self.range_context.emit(f * self._duration, pos))
 
         self.setObjectName("controls")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)

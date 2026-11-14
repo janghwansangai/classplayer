@@ -1,6 +1,7 @@
 """yt-dlp로 유튜브 영상을 파일로 저장한다 (수업 전 미리 받기 / 다운로드 기능)."""
 from __future__ import annotations
 
+import os
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -136,8 +137,6 @@ class DownloadJob(QObject):
             cats = list(r.sponsor_categories)
             postprocessors.append({"key": "SponsorBlock", "categories": cats, "when": "after_filter"})
             postprocessors.append({"key": "ModifyChapters", "remove_sponsor_segments": cats, "force_keyframes": False})
-        if r.subtitles and not preset.audio_only:
-            postprocessors.append({"key": "FFmpegSubtitlesConvertor", "format": "srt"})
         if preset.audio_only:
             postprocessors.append({"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"})
 
@@ -159,9 +158,6 @@ class DownloadJob(QObject):
         }
         if preset.merge:
             opts["merge_output_format"] = preset.merge
-        if r.subtitles and not preset.audio_only:
-            opts.update({"writesubtitles": True, "writeautomaticsub": True,
-                         "subtitleslangs": list(r.sub_langs), "subtitlesformat": "srt/best"})
         if r.ffmpeg_path:
             opts["ffmpeg_location"] = r.ffmpeg_path
         if r.js_runtime:
@@ -169,13 +165,71 @@ class DownloadJob(QObject):
         opts.update(r.extra)
         return opts
 
+    def _download_subtitles(self, video_path: str) -> None:
+        """자막은 영상과 따로, 실패해도 괜찮게 받는다.
+
+        유튜브는 자동 번역 자막(예: 한국어 영상의 영어 자막)을 자주 429(요청 과다)로 막는데,
+        한 언어가 막혀도 영상 저장 전체가 실패하지 않도록 한다.
+        """
+        import yt_dlp
+
+        r = self.req
+        base = str(Path(video_path).with_suffix(""))
+        common: dict[str, Any] = {
+            "skip_download": True, "quiet": True, "noprogress": True, "ignoreerrors": True,
+            "noplaylist": True, "outtmpl": base + ".%(ext)s", "subtitlesformat": "srt/vtt/best",
+            "postprocessors": [{"key": "FFmpegSubtitlesConvertor", "format": "srt"}],
+            "logger": None, "socket_timeout": 20,
+        }
+        if r.ffmpeg_path:
+            common["ffmpeg_location"] = r.ffmpeg_path
+        if r.js_runtime:
+            common["js_runtimes"] = {r.js_runtime: {"path": None}}
+        # 1) 사람이 만든 자막(한국어·영어)  2) 없으면 원래 말소리 자동 자막(번역 아님)
+        passes = [
+            {"writesubtitles": True, "writeautomaticsub": False, "subtitleslangs": list(r.sub_langs)},
+            {"writesubtitles": False, "writeautomaticsub": True,
+             "subtitleslangs": [f"{lang}-orig" for lang in r.sub_langs]},
+        ]
+        folder, stem = Path(video_path).parent, Path(base).name
+
+        def subs() -> set[str]:   # 파일 이름의 [ ] 때문에 glob 대신 직접 비교
+            return {n for n in os.listdir(folder) if n.startswith(stem + ".") and n.endswith(".srt")}
+
+        got = 0
+        for extra in passes:
+            if self._cancel.is_set():
+                return
+            before = subs()
+            try:
+                with yt_dlp.YoutubeDL({**common, **extra}) as ydl:
+                    ydl.extract_info(r.url, download=True)
+            except Exception as e:  # noqa: BLE001
+                self.log.emit(f"자막 받기 일부 실패(영상은 저장됨): {str(e).splitlines()[0]}")
+            after = subs()
+            got += len(after - before)
+            if got:
+                break
+        self.log.emit(f"자막 {got}개 저장" if got else "받을 수 있는 자막이 없었습니다 (영상은 저장됨)")
+
     def _run(self) -> None:
         try:
             import yt_dlp
 
             opts = self._build_opts()
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(self.req.url, download=True)
+            try:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(self.req.url, download=True)
+            except Exception as e:  # noqa: BLE001
+                # 어린이용 영상 등: 기본 방식 주소가 403 → android_vr 방식으로 한 번 더
+                if "403" not in str(e) or self._cancel.is_set() or "extractor_args" in self.req.extra:
+                    raise
+                self.log.emit("기본 방식이 막혀(403) 다른 방식으로 다시 받습니다")
+                self.progress.emit(0.0, "다른 방법으로 다시 받는 중…")
+                opts = self._build_opts()
+                opts["extractor_args"] = {"youtube": {"player_client": ["android_vr"]}}
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(self.req.url, download=True)
             if not self.final_path and info:
                 entry = info
                 if info.get("entries"):
@@ -186,6 +240,11 @@ class DownloadJob(QObject):
                     self.final_path = str(rd[-1]["filepath"])
                 elif entry.get("filepath"):
                     self.final_path = str(entry["filepath"])
+            r = self.req
+            preset = PRESET_BY_KEY.get(r.preset, PRESETS[0])
+            if r.subtitles and not preset.audio_only and self.final_path and not self._cancel.is_set():
+                self.progress.emit(0.995, "자막 받는 중…")
+                self._download_subtitles(self.final_path)
             self.progress.emit(1.0, "완료")
             self.finished.emit(self.final_path)
         except Exception as e:  # noqa: BLE001

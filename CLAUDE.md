@@ -7,7 +7,7 @@
 - 검증: `uv run pytest -q tests/test_units.py` → `tests/make_assets.sh` → `tests/smoke.py`(화면 캡처 PNG를 직접 보고 방향 확인) / `tests/perf.py`(드롭 프레임, hwdec 이름).
 - EAC 큐브맵 좌표는 FFmpeg v360의 eac 입력 규약을 따르며, 2026-11-13 라벨 영상으로 6방향 검증 완료. 바꿀 때는 반드시 smoke 캡처로 다시 확인.
 - 맥에서 QOpenGLWidget + mpv 렌더 API: 일반 모드는 flip_y=True, 360도 FBO 경로는 flip_y=False + 셰이더 u_flipY=0 이 맞는 조합.
-- 아직 없는 것: PyInstaller 패키징, 윈도우 실기 검증, PO 토큰 제공 플러그인, 초해상도(FSRCNNX) 셰이더.
+- 아직 없는 것: 윈도우 실기 검증, PO 토큰 제공 플러그인(어린이용 영상 403 해결에 필요), 초해상도(FSRCNNX) 셰이더.
 - 유튜브 재생 경로: `youtube/stream.py`의 StreamResolver가 앱 안에서 yt-dlp Python API로 주소를 풀어 `MpvWidget.play_stream()`에 넘긴다(기본). mpv 내장 ytdl 훅은 실패 시 폴백인데, 2026-11-13 기준 훅 경로는 googlevideo 403이 났고 내부 풀기 경로는 정상이었다.
 - 성능 튜닝용 환경변수: `CLASSPLAYER_SWAP_INTERVAL`(기본 1), `CLASSPLAYER_BLOCK_TARGET`(기본 1). 로컬 4K60 HEVC는 어느 조합이든 드롭 0~3.
 - 테스트: `CLASSPLAYER_TEST_MAX_HEIGHT=1080 uv run python tests/perf.py <유튜브링크> /tmp/out 24` 로 스트리밍 드롭 측정.
@@ -29,3 +29,10 @@
 - CI 주의: 2026-11-13 v0.3.0 태그 빌드에서 macOS 잡이 러너를 못 받아 15분 뒤 취소됨(코드 문제 아님) → `gh run rerun <id> --failed`.
 - yt-dlp 의 FFmpegFD.available() 은 ffmpeg_location 을 무시하고 PATH 만 본다(결과도 캐시). 그래서 bootstrap.setup_library_paths/MainWindow 시작 시 번들·ffmpeg 폴더를 PATH 앞에 넣는다. 이걸 빠뜨리면 번들 앱에서 '구간 녹화'가 "ffmpeg is not installed" 로 실패한다(v0.4.0 버그). 자가 점검 JSON 의 ytdlp_ffmpeg 가 true 인지 확인.
 - 탐색 미리보기: 스토리보드 시트는 브라우저 UA/Referer 로 받고 실패하면 4초 뒤 다시 시도. 미리보기 재료가 없으면 시간만 보인다.
+- 유튜브 검색: `youtube/search.py`(yt-dlp "ytsearch20:" + extract_flat, 약 1.2초, 썸네일은 i.ytimg mqdefault 4스레드). 링크 입력칸에 링크·파일이 아닌 글을 쓰고 Enter(또는 붙여넣고 재생) → SearchPanel(입력칸 아래 떠 있는 목록, ↓로 들어가 Enter, 오른쪽 클릭 미리 받기·링크 복사).
+- 2026-11-14 확인: 어린이용(made for kids) 유튜브 영상은 기본(TV)·web_embedded·android_vr·HLS·18번 형식 모두 googlevideo 403 (PO 토큰 필요). 앱은 web_embedded 로 한 번 다시 시도 후 "유튜브에서 열기" 안내. 해결하려면 bgutil-ytdlp-pot-provider(러스트 바이너리 bgutil-pot) 번들이 필요.
+- 미리 받기 자막: 영상 받기와 분리해 ignoreerrors 로 따로 받는다(사람 자막 ko/en → 없으면 {lang}-orig 자동 자막). 자동 번역 자막은 429 가 잦아 받지 않는다. 파일명의 [ ] 때문에 glob 쓰지 말 것. yt-dlp[curl-cffi] 로 impersonation 경고 제거(spec 에 curl_cffi 수집).
+- 탐색바 녹화 구간: ClickSlider.edit_marks — Shift+드래그 새 구간, 빨간 띠 끝(±6px) 끌기, 오른쪽 클릭 메뉴 → ControlBar.range_edited/range_context → RecordDialog.set_range.
+- 링크 입력칸에 붙여넣으면(한 번에 10자 넘게 늘고 클립보드와 같으면) 바로 재생. 링크의 t=/start= 는 mpv start 로 반영.
+- 설치 파일: 맥 `dist/ClassPlayer-mac-arm64.dmg`(build_mac.sh 의 make_dmg, 응용 프로그램 바로가기 포함), 윈도우 `packaging/classplayer.iss`(Inno Setup, 사용자 폴더 %LOCALAPPDATA%\Programs\ClassPlayer 설치·관리자 권한 불필요 → 앱 업데이트가 덮어쓸 수 있음). CI 가 ISCC 로 ClassPlayer-Setup-windows-x64.exe 를 만들어 릴리스에 올린다. 업데이트는 계속 zip 을 쓴다.
+- 알림(Toast)은 자기 스타일시트가 앱 QSS 를 덮으므로 버튼 색을 직접 지정한다. 다운로드 창 글은 ElideLabel(폭 고정, … 줄임).

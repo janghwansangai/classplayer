@@ -92,6 +92,9 @@ def resolve_info(info: dict[str, Any], url: str) -> ResolvedStream:
 
 
 CACHE_SECONDS = 20 * 60        # 메모리 캐시 (같은 실행 안에서)
+# 기본 클라이언트(TV) 주소가 403 으로 막히는 영상(어린이용 등)은 이 순서로 다시 시도한다
+# 2026-11-14 확인: 어린이용 영상은 어느 클라이언트든 PO 토큰 없이는 403 → 한 번만 다시 시도하고 안내한다
+FALLBACK_CLIENTS: list[list[str]] = [["web_embedded"]]
 DISK_MAX_SECONDS = 5 * 3600    # 디스크 캐시 최대 (유튜브 주소는 보통 6시간 유효)
 
 
@@ -245,7 +248,8 @@ class StreamResolver(QObject):
 
         threading.Thread(target=work, daemon=True).start()
 
-    def resolve(self, url: str) -> None:
+    def resolve(self, url: str, clients: list[str] | None = None) -> None:
+        """clients 를 주면 캐시를 건너뛰고 그 유튜브 클라이언트로 새로 푼다 (403 대응)."""
         self._gen += 1
         gen = self._gen
         h = int(self.max_height)
@@ -255,14 +259,16 @@ class StreamResolver(QObject):
 
         def work() -> None:
             try:
-                with self._lock:
-                    ev = self._inflight.get(key)
-                if ev is not None:
-                    ev.wait(60)             # 미리 풀기가 진행 중이면 그 결과를 기다린다
-                rs = self.cached(url)
+                rs = None
+                if not clients:
+                    with self._lock:
+                        ev = self._inflight.get(key)
+                    if ev is not None:
+                        ev.wait(60)             # 미리 풀기가 진행 중이면 그 결과를 기다린다
+                    rs = self.cached(url)
                 self.last_from_cache = rs is not None
                 if rs is None:
-                    rs = self._extract(url, h)
+                    rs = self._extract(url, h, clients)
                     self._store(key, rs)
             except Exception as e:  # noqa: BLE001
                 if gen == self._gen:
@@ -284,7 +290,7 @@ class StreamResolver(QObject):
                 oldest = min(self._cache, key=lambda k: self._cache[k][0])
                 self._cache.pop(oldest, None)
 
-    def _extract(self, url: str, h: int) -> ResolvedStream:
+    def _extract(self, url: str, h: int, clients: list[str] | None = None) -> ResolvedStream:
         import yt_dlp
 
         opts: dict[str, Any] = {
@@ -296,6 +302,8 @@ class StreamResolver(QObject):
         }
         if self.js_runtime:
             opts["js_runtimes"] = {self.js_runtime: {"path": self.js_runtime_path}}
+        if clients:
+            opts["extractor_args"] = {"youtube": {"player_client": list(clients)}}
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
         return resolve_info(info, url)

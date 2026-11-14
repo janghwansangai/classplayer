@@ -46,7 +46,8 @@ if js:
     binaries.append((js, "."))
 
 datas = [(str(SRC / "classplayer" / "assets" / "icon.png"), "assets")] + collect_data_files("yt_dlp_ejs") + collect_data_files("yt_dlp", includes=["**/*.json"])
-hiddenimports = collect_submodules("yt_dlp") + collect_submodules("yt_dlp_ejs") + collect_submodules("OpenGL") + ["mpv"]
+hiddenimports = (collect_submodules("yt_dlp") + collect_submodules("yt_dlp_ejs") + collect_submodules("OpenGL")
+                 + collect_submodules("curl_cffi") + ["mpv"])
 
 a = Analysis(
     [str(SRC / "classplayer" / "__main__.py")],
