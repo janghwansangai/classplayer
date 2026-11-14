@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 import os
 import sys
 from typing import Any
@@ -22,6 +23,7 @@ bootstrap.setup_library_paths()
 import mpv  # noqa: E402  (경로 설정 후에 import 해야 libmpv를 찾는다)
 
 from classplayer.vr.shaders import FRAG_SRC, VERT_SRC  # noqa: E402
+from classplayer.vr.stitch import flat, rot_matrix
 from classplayer.vr.view import VrView  # noqa: E402
 
 DRAG_THRESHOLD_PX = 4
@@ -101,7 +103,7 @@ class MpvWidget(QOpenGLWidget):
         if js_runtime:
             opts["ytdl_raw_options"] = f"js-runtimes={js_runtime}"
 
-        self.mpv = mpv.MPV(log_handler=self._on_log, loglevel="warn", **opts)
+        self.mpv = mpv.MPV(log_handler=self._on_log, loglevel="info", **opts)
         self.ctx: mpv.MpvRenderContext | None = None
         self._proc_addr = None
 
@@ -135,7 +137,7 @@ class MpvWidget(QOpenGLWidget):
         m.observe_property("dwidth", self._on_dims)
         m.observe_property("dheight", self._on_dims)
         m.observe_property("media-title", lambda _n, v: self.media_title_changed.emit(str(v or "")))
-        m.observe_property("hwdec-current", lambda _n, v: self.hwdec_changed.emit(str(v or "")))
+        m.observe_property("hwdec-current", lambda _n, v: v and self.hwdec_changed.emit(str(v)))
         m.observe_property("video-codec", lambda _n, v: self.codec_changed.emit(str(v or "")))
         m.observe_property("volume", lambda _n, v: self.volume_changed.emit(float(v or 0.0)))
         m.observe_property("mute", lambda _n, v: self.mute_changed.emit(bool(v)))
@@ -161,6 +163,11 @@ class MpvWidget(QOpenGLWidget):
 
     # ------------------------------------------------------------------ mpv 콜백
     def _on_log(self, level: str, component: str, message: str) -> None:
+        if component == "vd" and "Using hardware decoding (" in message:
+            self.hwdec_changed.emit(message.split("(", 1)[1].split(")", 1)[0])
+            return
+        if level in ("info", "v", "debug", "trace"):
+            return
         self.log_message.emit(level, component, message.rstrip())
 
     def _on_dims(self, _name: str, _value: Any) -> None:
@@ -183,10 +190,38 @@ class MpvWidget(QOpenGLWidget):
     def video_size(self) -> tuple[int, int]:
         return self._video_w, self._video_h
 
+    @staticmethod
+    def has_telemetry_srt(target: str) -> bool:
+        """DJI 등 카메라가 영상 옆에 남기는 .SRT 는 자막이 아니라 촬영 기록(위치·ISO 등)이다."""
+        p = Path(target)
+        for ext in (".SRT", ".srt"):
+            q = p.with_suffix(ext)
+            try:
+                if q.exists():
+                    head = q.read_bytes()[:600].decode("utf-8", errors="ignore")
+                    if "FrameCnt" in head or "[iso" in head or "[latitude" in head or "GPS(" in head:
+                        return True
+            except OSError:
+                pass
+        return False
+
     def play(self, target: str) -> None:
         """로컬 파일이나 일반 URL 재생 (mpv 내장 ytdl 훅 사용)."""
         self._reset_stream_options()
         self.set_dual_stream(False)
+        local = not target.startswith(("http://", "https://"))
+        try:
+            # 로컬 파일은 디스크에서 바로 읽으므로 큰 버퍼가 필요 없다 (11GB 360 영상에서 메모리 2.3GB → 줄임)
+            self.mpv["demuxer-max-bytes"] = "150MiB" if local else "800MiB"
+            self.mpv["demuxer-max-back-bytes"] = "50MiB" if local else "200MiB"
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            # 촬영 기록 SRT 를 자막으로 불러와 화면을 덮지 않게
+            self.mpv["sub-auto"] = "no" if (not target.startswith(("http://", "https://"))
+                                            and self.has_telemetry_srt(target)) else "fuzzy"
+        except Exception:  # noqa: BLE001
+            pass
         self.mpv.play(target)
         self.mpv.pause = False
         self.pause_changed.emit(False)
@@ -195,6 +230,11 @@ class MpvWidget(QOpenGLWidget):
                     subtitles: list[tuple[str, str, str]] | None = None, start: float = 0.0) -> None:
         """앱에서 직접 푼 스트림 주소 재생. 영상/소리가 따로 오면 audio-files 로 합친다."""
         self._reset_stream_options()
+        try:
+            self.mpv["demuxer-max-bytes"] = "800MiB"
+            self.mpv["demuxer-max-back-bytes"] = "200MiB"
+        except Exception:  # noqa: BLE001
+            pass
         if start > 0:
             self.mpv["start"] = f"{start:.1f}"     # 링크의 &t=23s 같은 시작 위치
         self.mpv["ytdl"] = False
@@ -211,11 +251,13 @@ class MpvWidget(QOpenGLWidget):
 
     DUAL_STREAM_FILTER = "[vid2][vid1]hstack[vo]"
 
-    def set_dual_stream(self, on: bool, swap: bool = False) -> None:
+    def set_dual_stream(self, on: bool, swap: bool = False, order: str | None = None) -> None:
         """렌즈별 영상 스트림이 2개인 파일(Insta360 X4 insv 등)을 가로로 붙여 듀얼 피쉬아이 한 장으로 만든다.
 
         Insta360 X4 실측: 1번 스트림이 화면 반대쪽(바깥 풍경) 렌즈라 오른쪽(앞)에, 2번(화면 쪽) 렌즈를 왼쪽(뒤)에 둔다. 필터를 거치려면 복사형 하드웨어 디코딩이 필요하다.
         """
+        if order:
+            swap = order == "12"
         want = ("[vid1][vid2]hstack[vo]" if swap else self.DUAL_STREAM_FILTER) if on else ""
         try:
             if (self.mpv["lavfi-complex"] or "") == want:
@@ -375,7 +417,9 @@ class MpvWidget(QOpenGLWidget):
         GL.glDeleteShader(fs)
         self._prog = prog
         for name in ("u_tex", "u_texSize", "u_viewSize", "u_yaw", "u_pitch", "u_fov",
-                     "u_projection", "u_stereo", "u_hq", "u_flipY", "u_fisheyeFov", "u_fisheyeSwap"):
+                     "u_projection", "u_stereo", "u_hq", "u_flipY", "u_fisheyeSwap",
+                     "u_lensC0", "u_lensC1", "u_lensR0", "u_lensR1", "u_lensFov0", "u_lensFov1",
+                     "u_globalRot", "u_backRot", "u_blend"):
             self._uniforms[name] = GL.glGetUniformLocation(prog, name)
         self._vao = GL.glGenVertexArrays(1)
 
@@ -490,8 +534,17 @@ class MpvWidget(QOpenGLWidget):
         GL.glUniform1f(u["u_pitch"], v.pitch)
         GL.glUniform1f(u["u_fov"], v.fov)
         GL.glUniform1i(u["u_projection"], {"eac": 1, "dfisheye": 2}.get(v.projection, 0))
-        GL.glUniform1f(u["u_fisheyeFov"], math.radians(v.fisheye_fov_deg))
-        GL.glUniform1i(u["u_fisheyeSwap"], 1 if v.fisheye_swap else 0)
+        st = v.stitch
+        GL.glUniform1i(u["u_fisheyeSwap"], 1 if st.swap else 0)
+        GL.glUniform2f(u["u_lensC0"], *st.c_front)
+        GL.glUniform2f(u["u_lensC1"], *st.c_back)
+        GL.glUniform1f(u["u_lensR0"], st.r_front)
+        GL.glUniform1f(u["u_lensR1"], st.r_back)
+        GL.glUniform1f(u["u_lensFov0"], math.radians(st.fov_front))
+        GL.glUniform1f(u["u_lensFov1"], math.radians(st.fov_back))
+        GL.glUniform1f(u["u_blend"], math.radians(st.blend))
+        GL.glUniformMatrix3fv(u["u_globalRot"], 1, GL.GL_TRUE, flat(rot_matrix(st.g_yaw, st.g_pitch, st.g_roll)))
+        GL.glUniformMatrix3fv(u["u_backRot"], 1, GL.GL_TRUE, flat(rot_matrix(st.back_yaw, st.back_pitch, st.back_roll)))
         GL.glUniform1i(u["u_stereo"], {"mono": 0, "tb": 1, "sbs": 2}.get(v.stereo, 0))
         GL.glUniform1i(u["u_hq"], 1 if v.hq else 0)
         GL.glUniform1i(u["u_flipY"], self._flip_y)

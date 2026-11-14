@@ -4,6 +4,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
+from classplayer.vr.stitch import StitchParams
+
 FOV_MIN = math.radians(15.0)
 FOV_MAX = math.radians(140.0)
 PITCH_LIMIT = math.radians(89.0)
@@ -21,10 +23,27 @@ class VrView:
     stereo: str = "mono"
     hq: bool = True
     max_magnification: float = 3.0
-    fisheye_fov_deg: float = 190.0
-    fisheye_swap: bool = False
+    stitch: StitchParams = field(default_factory=StitchParams)   # 듀얼 피쉬아이 렌즈 보정
     # 아래는 렌더러가 매 프레임 채워 넣는 값
     magnification: float = field(default=1.0, compare=False)
+
+    # 예전 메뉴(듀얼 피쉬아이 설정)와의 호환
+    @property
+    def fisheye_fov_deg(self) -> float:
+        return (self.stitch.fov_front + self.stitch.fov_back) * 0.5
+
+    @fisheye_fov_deg.setter
+    def fisheye_fov_deg(self, v: float) -> None:
+        d = (self.stitch.fov_front - self.stitch.fov_back) * 0.5
+        self.stitch.fov_front, self.stitch.fov_back = v + d, v - d
+
+    @property
+    def fisheye_swap(self) -> bool:
+        return self.stitch.swap
+
+    @fisheye_swap.setter
+    def fisheye_swap(self, v: bool) -> None:
+        self.stitch.swap = bool(v)
 
     def reset(self) -> None:
         self.yaw = 0.0

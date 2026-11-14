@@ -1,6 +1,7 @@
 """QSettings 기반 사용자 설정."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, QStandardPaths
@@ -8,7 +9,9 @@ from PySide6.QtCore import QSettings, QStandardPaths
 
 class Settings:
     def __init__(self) -> None:
-        self.q = QSettings("ClassPlayer", "ClassPlayer")
+        # 시험 스크립트는 CLASSPLAYER_TEST_SETTINGS=1 로 띄워 사용자 설정(다운로드 폴더 등)을 건드리지 않는다
+        app = "ClassPlayerTest" if os.environ.get("CLASSPLAYER_TEST_SETTINGS") else "ClassPlayer"
+        self.q = QSettings("ClassPlayer", app)
 
     # --- 라이브러리 ---
     @property

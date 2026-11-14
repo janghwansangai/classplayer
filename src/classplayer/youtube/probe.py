@@ -58,10 +58,16 @@ def probe_spherical(ffprobe: str | None, path: str) -> SphericalInfo:
         info.stereo = "sbs"
     lower = path.lower()
     if lower.endswith((".osv", ".lrf")) and info.width and info.height:
-        # DJI 360 원본(OSV)과 저화질 프록시(LRF): 두 렌즈 원이 나란히 담긴 듀얼 피쉬아이 (2:1)
-        if abs(info.width / info.height - 2.0) < 0.1:
+        # DJI 360 저화질본(LRF): 두 렌즈 원이 한 화면에 나란히 (2:1)
+        # DJI 360 원본(OSV): 렌즈별 정사각 영상 두 개 (2026-11-14 DJI Avata360 실측) → 재생 때 나란히 합친다
+        ratio = info.width / info.height
+        if abs(ratio - 2.0) < 0.1:
             info.is_spherical = True
             info.projection = "dfisheye"
+        elif len(vids) >= 2 and abs(ratio - 1.0) < 0.1:
+            info.is_spherical = True
+            info.projection = "dfisheye"
+            info.dual_stream = True
         return info
     if lower.endswith((".insv", ".insp", ".lrv")) and info.width and info.height:
         ratio = info.width / info.height

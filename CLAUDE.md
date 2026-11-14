@@ -15,7 +15,7 @@
 - 윈도우 빌드: `packaging/build_windows.bat` (미검증).
 - 디자인: 2026-11-14부터 시안 C(스튜디오 다크, 앰버 포인트) 채택. QSS·팔레트는 `ui/theme.py`(apply_palette), 아이콘은 `ui/icons.py`(SVG→QIcon, QtSvg). 시안 원본은 `design/ui_mockups_v2.html`. 영상 위 HUD 알약(hud/hudamber)과 360도 나침반(Compass)은 stage 자식 위젯. 아이콘은 `packaging/icon.svg` → `packaging/make_icon.py`로 png/ico/icns 생성.
 - 라이브러리 목록 썸네일/길이: `library/library.py`의 LibraryThumbs(ffmpeg/ffprobe, 캐시). 탐색 미리보기: `player/thumbnails.py`(로컬 ffmpeg 키프레임, 유튜브 스토리보드).
-- 듀얼 피쉬아이(insv) 투영: 셰이더 u_projection=2, FFmpeg dfisheye 규약(왼쪽 원=뒤, 오른쪽 원=앞)을 기본으로 하고 메뉴에서 좌우 바꾸기/화각 조절. 2026-11-13 합성 영상으로 6방향 검증.
+- 듀얼 피쉬아이 투영: 셰이더 u_projection=2 의 dfisheyeColor. 2026-11-14부터 렌즈별 보정(`vr/stitch.py` StitchParams: 렌즈 화각·원 중심·반지름, 뒤 렌즈 yaw/pitch/roll, 전체 방향 g_*, 이음새 섞기 blend). 기본값(190°·중심·회전 없음)은 예전 FFmpeg dfisheye 규약과 같다(단위 시험 test_stitch_defaults_match_old_mapping). lens_uv() 는 셰이더와 같은 계산의 파이썬판 → 바꾸면 둘 다 바꿀 것.
 - 안내: MainWindow.notify()가 토스트+상태줄, _show_loading()이 영상 위 로딩 문구(paused-for-cache 관찰로 버퍼링 표시). 윈도우 기본 플레이어 등록은 platform_win.py(HKCU 레지스트리).
 - app.setStyle('Fusion')으로 맥/윈도우 모양 통일 (윈도우 기본 스타일에서 QSS 일부가 안 먹던 문제).
 - Insta360 X4/X5 insv: 렌즈별 영상 스트림 2개(각 정사각형) → probe가 dual_stream 표시, MpvWidget.set_dual_stream()이 lavfi-complex `[vid2][vid1]hstack`으로 합쳐 듀얼 피쉬아이로 재생(실측: 스트림0=바깥 풍경 렌즈=오른쪽/앞, 스트림1=화면 쪽). 필터 경로라 hwdec은 auto-copy-safe. 합성 2스트림 파일 `tests/assets/test_360_dual.insv`로 6방향 검증.
@@ -40,3 +40,8 @@
 - HTTPS: 앱이 직접 여는 연결(업데이트, 미리보기 시트, 검색 썸네일, SponsorBlock)은 bootstrap.https_open() → truststore(운영체제 인증서; 학교망 HTTPS 검사 인증서 포함), 실패 시 운영체제+certifi. v0.4.2 이하 번들에서 업데이트 확인이 CERTIFICATE_VERIFY_FAILED 로 실패한 사례가 있음(사용자 학교망 추정). 자가 점검 JSON 의 ssl/https_app/pot_cli 확인.
 
 - 소개·다운로드 사이트: `site/`(Cloudflare Workers 정적 자산, https://classplayer.janhan97.workers.dev). 배포는 `cd site && npx wrangler deploy`. 다운로드 버튼은 GitHub releases/latest/download/<파일명> 이라 릴리스 파일 이름을 바꾸면 사이트도 고칠 것.
+- 시험 스크립트 주의: Settings 는 QSettings("ClassPlayer","ClassPlayer") 라 시험이 사용자 설정을 바꾼다(2026-11-14 다운로드 폴더가 scratchpad 로 바뀌어 사용자 녹화가 그쪽에 저장된 사고). 시험은 반드시 CLASSPLAYER_TEST_SETTINGS=1 (별도 "ClassPlayerTest" 저장소). tests/smoke.py·perf.py 는 자동 설정.
+- 360 이음새: identify_camera() — Insta360(insv/lrv)은 파일 끝 트레일러에서 기종·일련번호·offset(원 중심·반지름) 읽음, DJI(osv/lrf)는 encoder 태그. DJI Avata360 은 렌즈가 위·아래(g_pitch=90 기본), OSV 는 3840² 영상 2개(합치는 순서 [vid1][vid2]), Insta X5 insv 는 [vid2][vid1]. 처음 보는 카메라는 열 때 자동 맞추기(grab_frames 3장 → auto_align: 겹치는 띠 밝기 차이 최소화, 1초 미만) 후 settings "stitch/<기종 일련번호 확장자>" 에 저장. 보기 › 360 이음새 맞추기(⇧⌘3) 창에서 직접 조절. 2026-11-14 실측: 어긋남 insv −33%, OSV −52%, lrv −34%. 가까운 물체의 시차는 못 없앤다.
+- DJI 영상 옆 .SRT 는 비행 기록 → MpvWidget.has_telemetry_srt() 면 sub-auto=no.
+- 재생목록: `library/playlist.py`(PlaylistStore, AppData/playlists.json) + `ui/playlist_panel.py`(라이브러리 옆 탭 도크). 영상 끝(eof_reached) → 다음, N/P 키, 반복·섞기, 없는 파일·열기 실패는 건너뜀. 라이브러리·검색 결과 오른쪽 클릭 '재생목록에 추가'.
+- 대용량: 2026-11-14 11GB 듀얼 3840² HEVC(136Mbps) 시험 — 열기 0.3초, 30fps 유지, 이동 평균 0.8~1.2초, 메모리 1.3~1.5GB. 로컬 파일은 demuxer-max-bytes 150MiB(스트림은 800MiB). 배경 ffmpeg 은 bootstrap.run_low_priority(띄운 뒤 setpriority; preexec_fn 금지). 2GB 넘는 파일의 탐색 미리보기는 100군데만 건너뛰며 뽑는다. 두 스트림 합치기 경로는 hwdec-current 가 비어 로그("Using hardware decoding (…)")로 표시.

@@ -18,6 +18,7 @@ from PySide6.QtCore import QObject, QStandardPaths, Signal
 from PySide6.QtGui import QPixmap
 
 THUMB_W = 256
+BIG_FILE = 2 * 1024 ** 3      # 이보다 큰 파일은 건너뛰며 미리보기를 뽑는다
 _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
        "Chrome/131.0.0.0 Safari/537.36")
 RETRY_SECONDS = 4.0
@@ -63,21 +64,53 @@ class ThumbnailProvider(QObject):
             return
         gen = self._gen
         interval = max(1.0, min(10.0, duration / 150.0))
+        try:
+            if Path(path).stat().st_size > BIG_FILE:
+                interval = max(interval, duration / 100.0)    # 큰 파일은 100장 정도만
+        except OSError:
+            pass
         key = hashlib.sha1(f"{path}|{Path(path).stat().st_mtime}|{interval:.2f}".encode()).hexdigest()[:16]
         out = self._root / key
         self._dir, self._interval = out, interval
 
+        try:
+            big = Path(path).stat().st_size > BIG_FILE
+        except OSError:
+            big = False
+        from classplayer.bootstrap import run_low_priority
+
         def work() -> None:
             if not (out / "done").exists():
                 out.mkdir(parents=True, exist_ok=True)
-                cmd = [self.ffmpeg, "-y", "-v", "error", "-skip_frame", "nokey", "-i", path,
-                       "-vf", f"fps=1/{interval},scale={THUMB_W}:-2", "-fps_mode", "vfr", "-q:v", "6",
-                       str(out / "%05d.jpg")]
-                try:
-                    subprocess.run(cmd, capture_output=True, timeout=600, check=False)
-                    (out / "done").touch()
-                except Exception:  # noqa: BLE001
+                if big:
+                    # 큰 파일(수 GB): 전체를 읽으면 디스크·CPU 를 오래 붙잡아 재생이 끊길 수 있어
+                    # 필요한 지점만 건너뛰며 한 장씩 뽑는다. 재생이 자리 잡은 뒤에 시작.
+                    time.sleep(6)
+                    for i in range(int(duration // interval) + 1):
+                        if gen != self._gen:
+                            return
+                        t = i * interval
+                        cmd = [self.ffmpeg, "-y", "-v", "error", "-ss", f"{t:.2f}", "-i", path, "-map", "0:v:0",
+                               "-frames:v", "1", "-vf", f"scale={THUMB_W}:-2", "-q:v", "6",
+                               str(out / f"{i + 1:05d}.jpg")]
+                        try:
+                            run_low_priority(cmd, timeout=60)
+                        except Exception:  # noqa: BLE001
+                            continue
+                        if i % 10 == 9 and gen == self._gen:
+                            self._count = len(list(out.glob("*.jpg")))
+                            self.ready.emit()
+                else:
+                    cmd = [self.ffmpeg, "-y", "-v", "error", "-skip_frame", "nokey", "-i", path,
+                           "-vf", f"fps=1/{interval},scale={THUMB_W}:-2", "-fps_mode", "vfr", "-q:v", "6",
+                           str(out / "%05d.jpg")]
+                    try:
+                        run_low_priority(cmd, timeout=600)
+                    except Exception:  # noqa: BLE001
+                        return
+                if gen != self._gen:
                     return
+                (out / "done").touch()
             if gen == self._gen:
                 self._count = len(list(out.glob("*.jpg")))
                 self.ready.emit()

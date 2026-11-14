@@ -2,7 +2,9 @@
 
 사용법: python tests/smoke.py <영상> <출력폴더> [projection: equirect|eac] [stereo: mono|tb|sbs]
 """
+import os
 import sys
+os.environ.setdefault("CLASSPLAYER_TEST_SETTINGS", "1")
 import traceback
 from pathlib import Path
 

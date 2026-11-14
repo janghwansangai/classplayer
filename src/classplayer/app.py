@@ -22,6 +22,10 @@ from classplayer import __version__, bootstrap
 from classplayer.bootstrap import APP_NAME, AUDIO_EXTENSIONS, MEDIA_EXTENSIONS, VIDEO_EXTENSIONS
 from classplayer.record import LocalRecordJob, LocalRecordRequest, make_url_record_job
 from classplayer.ui import icons
+from classplayer.ui.stitch_dialog import StitchDialog
+from classplayer.ui.playlist_panel import PlaylistPanel
+from classplayer.library.playlist import PlaylistStore
+from classplayer.vr.stitch import StitchParams, auto_align, grab_frames, identify_camera
 from classplayer.updater import RELEASES_PAGE, Updater, can_self_install, is_newer
 from classplayer.library.library import LibraryPanel
 from classplayer.player.controls import ControlBar
@@ -48,7 +52,7 @@ S      자막 전환            A     오디오 트랙 전환
 ⌘L     링크 입력창          ⌘F    라이브러리 검색
 ⌘O     파일 열기            ⌘D    다운로드
 ⌘R     녹화·녹음            I / O 녹화 구간 시작 / 끝을 지금 위치로
-⌘B     소리만 재생
+⌘B     소리만 재생            N / P 재생목록 다음 / 이전 영상
 """
 
 
@@ -300,6 +304,12 @@ class _ProbeNotifier(QObject):
     result = Signal(str, object)
 
 
+class _StitchNotifier(QObject):
+    camera = Signal(str, object, bool)          # 경로, CameraInfo, 두 스트림 여부
+    aligned = Signal(str, object, float, float, bool)  # 경로, StitchParams, 처음 오차, 최종 오차, 사용자가 누름
+    failed = Signal(str, str)
+
+
 class _CopyNotifier(QObject):
     progress = Signal(int)
     finished = Signal(str, str)
@@ -440,6 +450,7 @@ class SearchPanel(QFrame):
 
     play_requested = Signal(str, str)        # url, 제목
     download_requested = Signal(str)
+    playlist_add_requested = Signal(str, str)   # url, 제목
     closed = Signal()
 
     def __init__(self, parent=None) -> None:
@@ -535,10 +546,13 @@ class SearchPanel(QFrame):
         m = QMenu(self)
         a_play = m.addAction("재생")
         a_dl = m.addAction("미리 받기 (파일로 저장)…")
+        a_pl = m.addAction("재생목록에 추가")
         a_copy = m.addAction("링크 복사")
         a = m.exec(self.list.viewport().mapToGlobal(pos))
         if a is a_play:
             self._activate(it)
+        elif a is a_pl:
+            self.playlist_add_requested.emit(r.url, r.title)
         elif a is a_dl:
             self.close_panel()
             self.download_requested.emit(r.url)
@@ -820,6 +834,13 @@ class MainWindow(QMainWindow):
         self._copy_sig.progress.connect(self._on_copy_progress)
         self._copy_sig.finished.connect(self._on_copy_finished)
         self._probe.result.connect(self._on_probe_result)
+        self._stitch_sig = _StitchNotifier()
+        self._stitch_sig.camera.connect(self._on_stitch_camera)
+        self._stitch_sig.aligned.connect(self._on_stitch_aligned)
+        self._stitch_sig.failed.connect(self._on_stitch_failed)
+        self._stitch_cam = None
+        self._stitch_dialog: StitchDialog | None = None
+        self._stitch_busy = False
 
         # --- 플레이어
         self.player = MpvWidget(
@@ -917,7 +938,9 @@ class MainWindow(QMainWindow):
         self.hud_subs.setObjectName("hud")
         self.hud_rec = QLabel("")
         self.hud_rec.setObjectName("hudrec")
-        for w in (self.hud_rec, self.hud_vr, self.hud_subs, self.hud_codec, self.hud_speed):
+        self.hud_pl = QLabel("")
+        self.hud_pl.setObjectName("hud")
+        for w in (self.hud_rec, self.hud_pl, self.hud_vr, self.hud_subs, self.hud_codec, self.hud_speed):
             hl.addWidget(w)
             w.hide()
         self.hud.move(16, 14)
@@ -943,6 +966,22 @@ class MainWindow(QMainWindow):
         self.dock_library.setObjectName("dock_library")
         self.dock_library.setWidget(self.library)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.dock_library)
+
+        # --- 재생목록 (라이브러리 옆 탭)
+        self.playlists = PlaylistStore(parent=self)
+        self.playlist_panel = PlaylistPanel(self.playlists)
+        self.playlist_panel.play_requested.connect(self.play_playlist)
+        self.playlist_panel.add_current_requested.connect(self._add_current_to_playlist)
+        self.playlists.position_changed.connect(lambda _n, _i: self._refresh_playlist_hud())
+        self.dock_playlist = QDockWidget("재생목록", self)
+        self.dock_playlist.setObjectName("dock_playlist")
+        self.dock_playlist.setWidget(self.playlist_panel)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.dock_playlist)
+        self.tabifyDockWidget(self.dock_library, self.dock_playlist)
+        self.dock_library.raise_()
+        self._from_playlist = False
+        self.library.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.library.list.customContextMenuRequested.connect(self._library_menu)
 
         self.downloads = DownloadPanel()
         self.downloads.play_requested.connect(self.open_target)
@@ -1007,6 +1046,7 @@ class MainWindow(QMainWindow):
         self.searcher.thumb.connect(self.search_panel.set_thumb)
         self.search_panel.play_requested.connect(self._play_search_result)
         self.search_panel.download_requested.connect(self._download_search_result)
+        self.search_panel.playlist_add_requested.connect(lambda u, t: self._add_to_playlist_menu(u, t))
         self.search_panel.closed.connect(lambda: self.url_edit.setFocus())
         self.url_edit.installEventFilter(self)
 
@@ -1049,6 +1089,7 @@ class MainWindow(QMainWindow):
         p.vr_changed.connect(self._on_vr_changed)
         p.buffering_changed.connect(self._on_buffering)
         p.load_failed.connect(self._on_load_failed)
+        p.eof_reached.connect(self._on_eof)
         p.subs_changed.connect(self._on_subs_changed)
         self.resolver.started.connect(self._on_resolve_started)
 
@@ -1106,6 +1147,11 @@ class MainWindow(QMainWindow):
         self.a_sponsor = act(m_play, "협찬 구간 자동 건너뛰기 (SponsorBlock)", self._toggle_sponsor, checkable=True, checked=True)
         self.a_audio_only = act(m_play, "소리만 재생 (영상 끄기)", self.toggle_audio_only, "Ctrl+B", checkable=True)
         m_play.addSeparator()
+        act(m_play, "다음 영상 (재생목록, N)", self.playlist_next)
+        act(m_play, "이전 영상 (재생목록, P)", self.playlist_prev)
+        act(m_play, "재생목록 보기", self.show_playlist, "Ctrl+Shift+L")
+        act(m_play, "지금 영상을 재생목록에 추가", lambda: self._add_to_playlist_menu(self._current, self.lbl_title.text() if is_url(self._current) else "") if self._current else self.notify("먼저 영상을 열어 주세요"))
+        m_play.addSeparator()
         act(m_play, "녹화 · 녹음…", self.open_record_dialog, "Ctrl+R")
         act(m_play, "녹화 구간 시작 = 지금 위치 (I)", lambda: self._mark_now(True))
         act(m_play, "녹화 구간 끝 = 지금 위치 (O)", lambda: self._mark_now(False))
@@ -1123,6 +1169,7 @@ class MainWindow(QMainWindow):
             a = act(m_proj, label, lambda _c, k=key: self._set_projection(k), checkable=True, checked=(key == "equirect"))
             g.addAction(a)
             self.a_proj[key] = a
+        act(m_view, "360 이음새 맞추기…", self.open_stitch_dialog, "Ctrl+Shift+3")
         m_fe = m_view.addMenu("듀얼 피쉬아이 설정")
         g_fe = QActionGroup(self)
         for fov in (180.0, 190.0, 200.0, 210.0):
@@ -1242,6 +1289,8 @@ class MainWindow(QMainWindow):
         self.set_vr(False)
         self.settings.add_recent(target)
         self.search_panel.close_panel()
+        if not self._from_playlist and self.playlists.active:
+            self.playlists.stop()
         self._client_step = 0
         self._awaiting_resolve = False
         self._mpv_fallback = False
@@ -1413,6 +1462,8 @@ class MainWindow(QMainWindow):
                         "유튜브에서 열기", lambda u=cur: QDesktopServices.openUrl(QUrl(u)))
         else:
             self.notify("영상을 열지 못했습니다. 인터넷 연결이나 파일을 확인해 주세요", 7000)
+        if self.playlists.active:
+            QTimer.singleShot(2500, self.playlist_next)      # 재생목록이면 다음 영상으로
 
     def _probe_local(self, path: str) -> None:
         ffprobe = self.ffprobe
@@ -1425,7 +1476,17 @@ class MainWindow(QMainWindow):
     def _on_probe_result(self, path: str, info: object) -> None:
         if path != self._current:
             return
-        if getattr(info, "dual_stream", False):
+        if getattr(info, "projection", "") == "dfisheye" and getattr(info, "is_spherical", False):
+            dual = bool(getattr(info, "dual_stream", False))
+            if dual:
+                self._show_loading("두 렌즈 영상을 합치는 중…")
+            ffprobe = self.ffprobe
+
+            def work(p=path, d=dual) -> None:
+                self._stitch_sig.camera.emit(p, identify_camera(p, ffprobe), d)
+
+            threading.Thread(target=work, daemon=True).start()
+        elif getattr(info, "dual_stream", False):
             self._show_loading("두 렌즈 영상을 합치는 중…")
             self.player.set_dual_stream(True)
         if getattr(info, "is_spherical", False):
@@ -1434,13 +1495,232 @@ class MainWindow(QMainWindow):
         elif path.lower().endswith((".insv", ".insp")) and getattr(info, "video_streams", 1) == 1:
             self.notify("이 insv 파일에는 렌즈 하나의 영상만 들어 있습니다. 짝이 되는 _10_ 파일과 함께 Insta360 Studio로 합쳐 주세요", 9000)
 
+    # ------------------------------------------------------------------ 재생목록
+    def play_playlist(self, name: str, idx: int = 0) -> None:
+        item = self.playlists.start(name, idx)
+        if item is None:
+            self.notify("재생목록이 비어 있습니다. 영상을 추가해 주세요", 4000)
+            return
+        self._open_playlist_item(item)
+
+    def _open_playlist_item(self, item) -> None:
+        if not item.is_link and not Path(item.target).exists():
+            self.notify(f"파일을 찾지 못해 건너뜁니다: {Path(item.target).name}", 4000)
+            QTimer.singleShot(800, self.playlist_next)
+            return
+        self._from_playlist = True
+        try:
+            self.open_target(item.target)
+        finally:
+            self._from_playlist = False
+
+    def playlist_next(self) -> None:
+        if not self.playlists.active:
+            self.notify("재생목록을 재생 중일 때 다음 영상으로 넘어갈 수 있습니다", 3000)
+            return
+        item = self.playlists.next()
+        if item is None:
+            self.playlists.stop()
+            self.notify("재생목록을 끝까지 재생했습니다", 4000)
+            return
+        self._open_playlist_item(item)
+
+    def playlist_prev(self) -> None:
+        if not self.playlists.active:
+            return
+        item = self.playlists.prev()
+        if item is not None:
+            self._open_playlist_item(item)
+
+    def _on_eof(self) -> None:
+        if self.playlists.active and not self._fullscreen_seeking():
+            QTimer.singleShot(600, self.playlist_next)
+
+    def _fullscreen_seeking(self) -> bool:
+        return self.controls.slider.isSliderDown()
+
+    def _refresh_playlist_hud(self) -> None:
+        name, i = self.playlists.active, self.playlists.index
+        p = self.playlists.get(name) if name else None
+        if p and i >= 0:
+            self.hud_pl.setText(f"{name} {i + 1}/{len(p.items)}")
+            self.hud_pl.show()
+        else:
+            self.hud_pl.hide()
+        self._refresh_hud()
+
+    def _add_current_to_playlist(self, name: str) -> None:
+        if not self._current:
+            self.notify("먼저 영상을 열어 주세요", 3000)
+            return
+        title = self.lbl_title.text() if is_url(self._current) else ""
+        if self.playlists.add(name, self._current, title):
+            self.notify(f"'{name}'에 추가했습니다", 2500)
+
+    def _add_to_playlist_menu(self, target: str, title: str = "") -> None:
+        """재생목록 고르기 메뉴를 띄워 추가한다 (목록이 하나면 바로)."""
+        from PySide6.QtGui import QCursor
+        from PySide6.QtWidgets import QMenu
+        names = self.playlists.names()
+        if len(names) == 1:
+            name = names[0]
+        else:
+            m = QMenu(self)
+            acts = {m.addAction(n): n for n in names}
+            m.addSeparator()
+            a_new = m.addAction("새 재생목록 만들기…")
+            a = m.exec(QCursor.pos())
+            if a is None:
+                return
+            if a is a_new:
+                from PySide6.QtWidgets import QInputDialog
+                n, ok = QInputDialog.getText(self, "새 재생목록", "목록 이름", text=self.playlists.unique_name("새 목록"))
+                if not ok:
+                    return
+                name = self.playlists.create(n)
+            else:
+                name = acts[a]
+        if self.playlists.add(name, target, title):
+            self.playlist_panel.select_list(name)
+            self.notify(f"'{name}'에 추가했습니다", 2500, "목록 보기", self.show_playlist)
+
+    def show_playlist(self) -> None:
+        self.dock_playlist.show()
+        self.dock_playlist.raise_()
+
+    def _library_menu(self, pos) -> None:
+        from PySide6.QtWidgets import QMenu
+        it = self.library.list.itemAt(pos)
+        if it is None:
+            return
+        path = str(it.data(Qt.ItemDataRole.UserRole) or "")
+        m = QMenu(self)
+        a_play = m.addAction("재생")
+        a_pl = m.addAction("재생목록에 추가")
+        a_reveal = m.addAction("폴더에서 보기")
+        a = m.exec(self.library.list.viewport().mapToGlobal(pos))
+        if a is a_play:
+            self.open_target(path)
+        elif a is a_pl:
+            self._add_to_playlist_menu(path)
+        elif a is a_reveal:
+            reveal_in_folder(path)
+
+    # ------------------------------------------------------------------ 360 이음새 (두 렌즈)
+    def _stitch_key(self, cam) -> str:
+        return "stitch/" + cam.key
+
+    def _on_stitch_camera(self, path: str, cam, dual: bool) -> None:
+        if path != self._current:
+            return
+        self._stitch_cam = cam
+        if dual:
+            self.player.set_dual_stream(True, order=cam.dual_stream_order)
+        saved = self.settings.q.value(self._stitch_key(cam), "")
+        params = None
+        if saved:
+            try:
+                params = StitchParams.from_json(str(saved))
+            except Exception:  # noqa: BLE001
+                params = None
+        self._apply_stitch(params or cam.defaults.copy(), save=False)
+        if self._stitch_dialog is not None:
+            self._stitch_dialog.set_camera(cam.label)
+        if params is None and not bootstrap.is_cloud_placeholder(path):
+            # 이 카메라를 처음 본다: 뒤에서 자동으로 맞춘다
+            QTimer.singleShot(1500, lambda p=path: self.auto_stitch(user=False, path=p))
+
+    def _apply_stitch(self, params: StitchParams, save: bool = True) -> None:
+        self.player.vr.stitch = params.copy()
+        self.player.update()
+        if self._stitch_dialog is not None:
+            self._stitch_dialog.set_params(params)
+        if save and self._stitch_cam is not None:
+            self.settings.q.setValue(self._stitch_key(self._stitch_cam), params.to_json())
+
+    def open_stitch_dialog(self) -> None:
+        if self.player.vr.projection != "dfisheye" or not self.player.vr_enabled:
+            self.notify("두 렌즈(듀얼 피쉬아이) 360 영상을 열면 이음새를 맞출 수 있습니다 (insv, lrv, OSV, LRF 등)", 5000)
+            return
+        if self._stitch_dialog is None:
+            d = StitchDialog(self)
+            d.params_changed.connect(lambda p: self._apply_stitch(p, save=True))
+            d.auto_requested.connect(lambda: self.auto_stitch(user=True))
+            d.reset_requested.connect(self._reset_stitch)
+            self._stitch_dialog = d
+        d = self._stitch_dialog
+        d.set_camera(self._stitch_cam.label if self._stitch_cam else "알 수 없음 (일반 듀얼 피쉬아이)")
+        d.set_params(self.player.vr.stitch)
+        d.set_busy(self._stitch_busy)
+        d.show()
+        d.raise_()
+
+    def _reset_stitch(self) -> None:
+        cam = self._stitch_cam
+        if cam is not None:
+            self.settings.q.remove(self._stitch_key(cam))
+        self._apply_stitch(cam.defaults.copy() if cam else StitchParams(), save=False)
+        if self._stitch_dialog is not None:
+            self._stitch_dialog.set_status("카메라 기본값으로 되돌렸습니다")
+
+    def auto_stitch(self, user: bool = True, path: str | None = None) -> None:
+        path = path or self._current
+        if not path or is_url(path) or path != self._current or self._stitch_busy:
+            return
+        if not self.ffmpeg:
+            return
+        cam = self._stitch_cam
+        start = self.player.vr.stitch.copy()
+        dual = self.player.dual_stream
+        order = cam.dual_stream_order if (cam and dual) else None
+        dur = float(self.player.property("duration", 0.0) or 0.0)
+        ffmpeg = self.ffmpeg
+        self._stitch_busy = True
+        if self._stitch_dialog is not None:
+            self._stitch_dialog.set_busy(True)
+            self._stitch_dialog.set_status("영상 세 장면을 비교하는 중… (몇 초 걸립니다)")
+        if user:
+            self.statusBar().showMessage("360 이음새를 자동으로 맞추는 중…", 5000)
+
+        def work() -> None:
+            try:
+                frames = grab_frames(ffmpeg, path, dur, order, tile=384)
+                if len(frames) < 1:
+                    raise RuntimeError("장면을 꺼내지 못했습니다")
+                res, first, final = auto_align(start, frames)
+                res.blend = start.blend
+                self._stitch_sig.aligned.emit(path, res, first, final, user)
+            except Exception as e:  # noqa: BLE001
+                self._stitch_sig.failed.emit(path, str(e))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_stitch_aligned(self, path: str, params, first: float, final: float, user: bool) -> None:
+        self._stitch_busy = False
+        if self._stitch_dialog is not None:
+            self._stitch_dialog.set_busy(False)
+        if path != self._current:
+            return
+        better = (1 - final / first) * 100 if first > 0 else 0.0
+        self._apply_stitch(params, save=True)
+        msg = f"360 이음새를 자동으로 맞췄습니다 (어긋남 {better:.0f}% 줄임)" if better > 1 else "이미 잘 맞아 있어 바꾸지 않았습니다"
+        if self._stitch_dialog is not None:
+            self._stitch_dialog.set_status(msg + f" · 화각 {(params.fov_front + params.fov_back) / 2:.1f}°")
+        self.notify(msg, 6000, "조절하기", self.open_stitch_dialog)
+
+    def _on_stitch_failed(self, path: str, msg: str) -> None:
+        self._stitch_busy = False
+        if self._stitch_dialog is not None:
+            self._stitch_dialog.set_busy(False)
+            self._stitch_dialog.set_status("자동 맞추기 실패: " + msg)
+
     # ------------------------------------------------------------------ 영상 위 상태 표시(HUD)
     def _refresh_hud(self) -> None:
         vr_on = self.player.vr_enabled
         v = self.player.vr
         self.hud_vr.setText(f"360° · 시야 {math.degrees(v.fov):.0f}°" if vr_on else "")
         self.hud_vr.setVisible(vr_on)
-        any_shown = any(not w.isHidden() for w in (self.hud_rec, self.hud_vr, self.hud_subs, self.hud_codec, self.hud_speed))
+        any_shown = any(not w.isHidden() for w in (self.hud_rec, self.hud_pl, self.hud_vr, self.hud_subs, self.hud_codec, self.hud_speed))
         self.hud.adjustSize()
         self.hud.setVisible(any_shown and (bool(self._current) or not self.hud_rec.isHidden()))
         self.hud.raise_()
@@ -2201,6 +2481,10 @@ class MainWindow(QMainWindow):
             self.set_vr(not p.vr_enabled)
         elif k == K.Key_R:
             p.vr_reset()
+        elif k == K.Key_N:
+            self.playlist_next()
+        elif k == K.Key_P:
+            self.playlist_prev()
         elif k == K.Key_I:
             self._mark_now(True)
         elif k == K.Key_O:
@@ -2307,6 +2591,9 @@ def _run_selftest(app: QApplication, win: "MainWindow", target: str) -> None:
         info["bundled"] = bool(bootstrap.bundled_dir())
         info["libmpv"] = bootstrap.loaded_libmpv_path()
         info["pot_cli"] = win.pot_cli
+        info["vr"] = {"on": p.vr_enabled, "projection": p.vr.projection, "dual_stream": p.dual_stream,
+                      "camera": win._stitch_cam.label if win._stitch_cam else None,
+                      "fov": round((p.vr.stitch.fov_front + p.vr.stitch.fov_back) / 2, 2)}
         import urllib.request
         try:
             urllib.request.urlopen("https://api.github.com/", timeout=10)

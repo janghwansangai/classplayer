@@ -64,3 +64,51 @@ def test_vr_rotate_wraps_and_clamps():
     assert -math.pi <= v.yaw <= math.pi
     v.rotate(0, math.radians(200))
     assert v.pitch <= math.radians(89) + 1e-9
+
+
+def test_stitch_defaults_match_old_mapping():
+    """보정값이 기본(190°, 중심, 회전 없음)이면 예전 듀얼 피쉬아이 계산과 같아야 한다."""
+    import math
+    from classplayer.vr.stitch import StitchParams, lens_uv, rot_matrix
+    p = StitchParams()
+    br = rot_matrix(0, 0, 0)
+    for v in [(0.0, 0.0, 1.0), (0.5, 0.2, 0.8), (-0.3, -0.4, -0.86)]:
+        n = math.sqrt(sum(c * c for c in v))
+        v = tuple(c / n for c in v)
+        pf, uf, pb, ub = lens_uv(v, p, br)
+        front = v[2] >= 0
+        z = abs(v[2]); x = v[0] if front else -v[0]
+        phi = math.acos(z); th = math.atan2(v[1], x); r = phi / math.radians(95)
+        cx = 0.75 if front else 0.25
+        old = (cx + r * math.cos(th) * 0.25, 0.5 + r * math.sin(th) * 0.5)
+        new = uf if front else ub
+        assert abs(old[0] - new[0]) < 1e-9 and abs(old[1] - new[1]) < 1e-9
+
+
+def test_stitch_params_json_roundtrip():
+    from classplayer.vr.stitch import StitchParams
+    p = StitchParams(fov_front=193.5, back_roll=1.25, c_back=(0.49, 0.51), swap=True)
+    q = StitchParams.from_json(p.to_json())
+    assert q == p
+
+
+def test_playlist_order(tmp_path):
+    from PySide6.QtCore import QCoreApplication
+    QCoreApplication.instance() or QCoreApplication([])
+    from classplayer.library.playlist import PlaylistStore
+    st = PlaylistStore(path=tmp_path / "pl.json")
+    name = st.names()[0]
+    for t in ("a.mp4", "b.mp4", "c.mp4"):
+        st.add(name, t)
+    assert st.start(name, 0).target == "a.mp4"
+    assert st.next().target == "b.mp4"
+    assert st.next().target == "c.mp4"
+    assert st.next() is None            # 반복 끔: 끝
+    st.set_options(repeat=True)
+    st.start(name, 2)
+    assert st.next().target == "a.mp4"  # 반복 켬: 처음으로
+    assert st.prev().target == "c.mp4"
+    st.move(name, 0, 1)
+    assert [i.target for i in st.get(name).items] == ["b.mp4", "a.mp4", "c.mp4"]
+    st2 = PlaylistStore(path=tmp_path / "pl.json")   # 다시 불러와도 남아 있다
+    assert len(st2.get(name).items) == 3

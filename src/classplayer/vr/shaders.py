@@ -25,8 +25,14 @@ uniform float u_yaw;         // 라디안, + = 오른쪽
 uniform float u_pitch;       // 라디안, + = 위
 uniform float u_fov;         // 가로 시야각(라디안)
 uniform int   u_projection;  // 0 = 등장방형, 1 = 유튜브 EAC, 2 = 듀얼 피쉬아이(Insta360 원본)
-uniform float u_fisheyeFov;  // 렌즈 화각(라디안), 보통 190~200도
 uniform int   u_fisheyeSwap; // 1 = 앞/뒤 렌즈 좌우 바꿈
+// 듀얼 피쉬아이 보정 (vr/stitch.py 와 같은 계산). 0 = 앞 렌즈, 1 = 뒤 렌즈
+uniform vec2  u_lensC0, u_lensC1;      // 칸 안 원 중심 (0..1)
+uniform float u_lensR0, u_lensR1;      // 칸 폭 대비 원 반지름
+uniform float u_lensFov0, u_lensFov1;  // 렌즈 화각(라디안)
+uniform mat3  u_globalRot;             // 수평·방향 보정
+uniform mat3  u_backRot;               // 뒤 렌즈 틀어짐 보정
+uniform float u_blend;                 // 이음새를 섞는 폭(라디안, ±)
 uniform int   u_stereo;      // 0 = 모노, 1 = 상하 분할, 2 = 좌우 분할
 uniform int   u_hq;          // 1 = 바이큐빅 표본화
 uniform int   u_flipY;       // 1 = 텍스처 세로 뒤집기
@@ -128,28 +134,45 @@ vec2 eacUV(vec3 d) {
     return vec2((uf + uFace) / 3.0, (vf + vFace) / 2.0);
 }
 
-// 듀얼 피쉬아이: 왼쪽 원 = 앞 렌즈, 오른쪽 원 = 뒤 렌즈 (등거리 투영)
-vec2 dfisheyeUV(vec3 d) {
-    vec3 v = vec3(d.x, -d.y, -d.z);          // x 오른쪽, y 아래, z 정면
-    bool front = v.z >= 0.0;
-    if (u_fisheyeSwap == 1) front = !front;
-    float z = (v.z >= 0.0) ? v.z : -v.z;
-    float x = (v.z >= 0.0) ? v.x : -v.x;
-    float phi = acos(clamp(z, -1.0, 1.0));   // 광축에서 벗어난 각
-    float theta = atan(v.y, x);
-    float r = phi / (u_fisheyeFov * 0.5);    // 0 = 중심, 1 = 원 가장자리
-    r = min(r, 1.02);
-    float cx = front ? 0.75 : 0.25;   // FFmpeg dfisheye 규약: 왼쪽 원이 뒤, 오른쪽 원이 앞
-    return vec2(cx + r * cos(theta) * 0.25, 0.5 + r * sin(theta) * 0.5);
+vec4 sampleAt(vec2 uv) {
+    if (u_stereo == 1)      uv.y *= 0.5;
+    else if (u_stereo == 2) uv.x *= 0.5;
+    if (u_flipY == 1) uv.y = 1.0 - uv.y;
+    return (u_hq == 1) ? sampleBicubic(uv) : texture(u_tex, uv);
+}
+
+// 렌즈 로컬 방향 l → 텍스처 좌표 (등거리 투영). phi = 광축에서 벗어난 각
+vec2 lensUV(vec3 l, vec2 c, float r, float fov, float tile, out float phi) {
+    phi = acos(clamp(l.z, -1.0, 1.0));
+    float theta = atan(l.y, l.x);
+    float rr = r * phi / (fov * 0.5);
+    vec2 t = c + rr * vec2(cos(theta), sin(theta));
+    return vec2((tile + t.x) * 0.5, t.y);
+}
+
+// 듀얼 피쉬아이: 두 렌즈를 보정값대로 투영하고, 경계 띠에서는 부드럽게 섞는다
+vec4 dfisheyeColor(vec3 d) {
+    vec3 c = u_globalRot * d;
+    vec3 v = vec3(c.x, -c.y, -c.z);                 // x 오른쪽, y 아래, z 앞 렌즈 광축
+    float tileF = (u_fisheyeSwap == 1) ? 0.0 : 1.0; // 기본: 오른쪽 칸 = 앞 렌즈
+    float pf, pb;
+    vec2 uf = lensUV(v, u_lensC0, u_lensR0, u_lensFov0, tileF, pf);
+    vec2 ub = lensUV(u_backRot * vec3(-v.x, v.y, -v.z), u_lensC1, u_lensR1, u_lensFov1, 1.0 - tileF, pb);
+    float w = smoothstep(-max(u_blend, 1e-4), max(u_blend, 1e-4), pb - pf);   // 1 = 앞 렌즈
+    if (pf > u_lensFov0 * 0.5) w = 0.0;
+    if (pb > u_lensFov1 * 0.5) w = 1.0;
+    if (w >= 0.999) return sampleAt(uf);
+    if (w <= 0.001) return sampleAt(ub);
+    return mix(sampleAt(ub), sampleAt(uf), w);
 }
 
 void main() {
     vec3 d = rayDir();
-    vec2 uv = (u_projection == 1) ? eacUV(d) : (u_projection == 2) ? dfisheyeUV(d) : equirectUV(d);
-    if (u_stereo == 1)      uv.y *= 0.5;
-    else if (u_stereo == 2) uv.x *= 0.5;
-    if (u_flipY == 1) uv.y = 1.0 - uv.y;
-    fragColor = (u_hq == 1) ? sampleBicubic(uv) : texture(u_tex, uv);
+    if (u_projection == 2) {
+        fragColor = dfisheyeColor(d);
+    } else {
+        fragColor = sampleAt((u_projection == 1) ? eacUV(d) : equirectUV(d));
+    }
     fragColor.a = 1.0;
 }
 """

@@ -179,3 +179,25 @@ def https_open(req, timeout: float = 15.0):
     """urllib.request.urlopen 대신 쓴다 (인증서 문제 방지)."""
     import urllib.request
     return urllib.request.urlopen(req, timeout=timeout, context=ssl_context())
+
+
+def run_low_priority(cmd: list[str], timeout: float = 600):
+    """배경 ffmpeg(미리보기 그림, 자동 맞추기 등)를 낮은 우선순위로 돌려 재생이 끊기지 않게 한다.
+
+    preexec_fn 은 스레드가 있는 프로그램에서 안전하지 않아, 띄운 직후 우선순위를 낮춘다.
+    돌려주는 값: (stdout 바이트, 종료 코드)
+    """
+    import subprocess
+    flags = (0x00004000 | 0x08000000) if sys.platform.startswith("win") else 0   # BELOW_NORMAL | NO_WINDOW
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, creationflags=flags)
+    if not sys.platform.startswith("win"):
+        try:
+            os.setpriority(os.PRIO_PROCESS, proc.pid, 10)
+        except (OSError, AttributeError):
+            pass
+    try:
+        out, _ = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        out, _ = proc.communicate()
+    return out, proc.returncode

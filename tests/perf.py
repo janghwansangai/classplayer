@@ -1,5 +1,7 @@
 """일반 모드 재생 성능 확인: N초 재생 후 드롭 프레임 수와 디코더를 보고한다."""
+import os
 import sys
+os.environ.setdefault("CLASSPLAYER_TEST_SETTINGS", "1")
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
