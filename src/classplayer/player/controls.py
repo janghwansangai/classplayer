@@ -1,8 +1,13 @@
-"""하단 컨트롤바: 재생/정지, 탐색 슬라이더, 시간, 볼륨, 속도, 자막, 360도, 전체화면."""
+"""하단 컨트롤바: 재생/정지, 탐색 슬라이더, 시간, 볼륨, 속도, 자막, 캡처, 녹화, 360도, 소리만, 전체화면."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QSlider, QStyle, QToolButton, QWidget)
+from PySide6.QtCore import QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QPainter
+from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QSlider, QStyle, QStyleOptionSlider, QToolButton,
+                               QWidget)
+
+from classplayer.ui import icons
+from classplayer.ui.theme import AMBER_HOVER, ICON
 
 SLIDER_MAX = 100_000
 
@@ -25,6 +30,32 @@ class ClickSlider(QSlider):
         super().__init__(orientation, parent)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setMouseTracking(True)
+        self._marks: tuple[float, float] | None = None   # 녹화 구간 (0..1 비율)
+
+    def set_marks(self, a: float | None, b: float | None) -> None:
+        """녹화할 구간을 홈 위에 빨간 띠로 표시한다. 둘 다 None 이면 지운다."""
+        self._marks = None if a is None or b is None else (max(0.0, min(a, b)), min(1.0, max(a, b)))
+        self.update()
+
+    def paintEvent(self, e) -> None:
+        super().paintEvent(e)
+        if not self._marks:
+            return
+        opt = QStyleOptionSlider()
+        self.initStyleOption(opt)
+        groove = self.style().subControlRect(QStyle.ComplexControl.CC_Slider, opt,
+                                             QStyle.SubControl.SC_SliderGroove, self)
+        a, b = self._marks
+        x0 = groove.left() + a * groove.width()
+        x1 = groove.left() + b * groove.width()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        cy = groove.center().y()
+        p.fillRect(QRectF(x0, cy - 4, max(2.0, x1 - x0), 8), QColor(239, 68, 68, 150))
+        p.setPen(QColor("#ef4444"))
+        for x in (x0, x1):
+            p.drawLine(int(x), cy - 8, int(x), cy + 8)
+        p.end()
 
     def mouseMoveEvent(self, e) -> None:
         frac = min(1.0, max(0.0, e.position().x() / max(1, self.width())))
@@ -58,6 +89,8 @@ class ControlBar(QWidget):
     vr_reset_clicked = Signal()
     fullscreen_clicked = Signal()
     screenshot_clicked = Signal()
+    record_clicked = Signal()
+    audio_only_toggled = Signal(bool)
     preview_hover = Signal(float, int)   # 초, 슬라이더 안 x
     preview_leave = Signal()
 
@@ -67,24 +100,26 @@ class ControlBar(QWidget):
         self._paused = True
         st = self.style()
 
-        def tool(text: str, tip: str, icon=None, checkable=False) -> QToolButton:
+        def tool(name: str, tip: str, checkable: bool = False, active: str | None = None) -> QToolButton:
             b = QToolButton(self)
-            if icon is not None:
-                b.setIcon(st.standardIcon(icon))
-            else:
-                b.setText(text)
+            b.setIcon(icons.icon(name, ICON, active or AMBER_HOVER))
+            b.setIconSize(QSize(20, 20))
             b.setToolTip(tip)
             b.setCheckable(checkable)
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             b.setAutoRaise(True)
             return b
 
-        self.btn_play = tool("▶", "재생/일시정지 (Space)")
+        self.btn_play = QToolButton(self)
         self.btn_play.setObjectName("play")
+        self.btn_play.setToolTip("재생/일시정지 (Space)")
+        self.btn_play.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_play.setIconSize(QSize(20, 20))
+        self.btn_play.setIcon(icons.icon("play", "#1b1206"))
         self.btn_play.clicked.connect(self.play_clicked)
-        self.btn_back = tool("", "10초 뒤로 (←)", QStyle.StandardPixmap.SP_MediaSeekBackward)
-        self.btn_fwd = tool("", "10초 앞으로 (→)", QStyle.StandardPixmap.SP_MediaSeekForward)
-        self.btn_back.clicked.connect(lambda: self.seek_requested.emit(-10.0) if False else self._rel(-10))
+        self.btn_back = tool("back10", "10초 뒤로 (←)")
+        self.btn_fwd = tool("fwd10", "10초 앞으로 (→)")
+        self.btn_back.clicked.connect(lambda: self._rel(-10))
         self.btn_fwd.clicked.connect(lambda: self._rel(10))
 
         self.slider = ClickSlider()
@@ -99,15 +134,16 @@ class ControlBar(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.lbl_time = QLabel("00:00 / 00:00")
         self.lbl_time.setObjectName("time")
-        self.lbl_time.setMinimumWidth(110)
+        self.lbl_time.setMinimumWidth(116)
         self.lbl_time.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_time.setTextFormat(Qt.TextFormat.RichText)
 
-        self.btn_mute = tool("", "음소거 (M)", QStyle.StandardPixmap.SP_MediaVolume)
+        self.btn_mute = tool("volume", "음소거 (M)")
         self.btn_mute.clicked.connect(self.mute_clicked)
         self.vol = ClickSlider()
         self.vol.setRange(0, 150)
         self.vol.setValue(100)
-        self.vol.setFixedWidth(110)
+        self.vol.setFixedWidth(96)
         self.vol.setObjectName("volume")
         self.vol.setToolTip("볼륨 (↑/↓, 휠)")
         self.vol.valueChanged.connect(self.volume_changed)
@@ -120,33 +156,38 @@ class ControlBar(QWidget):
         self.speed.setToolTip("재생 속도 ([ / ])")
         self.speed.currentIndexChanged.connect(lambda i: self.speed_changed.emit(float(self.speed.itemData(i))))
 
-        self.btn_subs = tool("자막", "자막 전환 (S)")
+        self.btn_subs = tool("subs", "자막 전환 (S)")
         self.btn_subs.clicked.connect(self.subs_clicked)
-        self.btn_shot = tool("캡처", "현재 화면을 이미지로 저장")
+        self.btn_shot = tool("camera", "현재 화면을 이미지로 저장")
         self.btn_shot.clicked.connect(self.screenshot_clicked)
-        self.btn_vr = tool("360°", "360도 모드 (3)", checkable=True)
+        self.btn_rec = tool("record", "녹화·녹음: 전체 또는 구간을 파일로 저장 (Ctrl+R)")
+        self.btn_rec.setObjectName("record")
+        self.btn_rec.clicked.connect(self.record_clicked)
+        self.btn_vr = tool("globe", "360도 모드 (3)", checkable=True)
         self.btn_vr.toggled.connect(self.vr_toggled)
-        self.btn_vr_reset = tool("⟲", "시점 초기화 (R)")
+        self.btn_vr_reset = tool("reset", "시점 초기화 (R)")
         self.btn_vr_reset.clicked.connect(self.vr_reset_clicked)
         self.btn_vr_reset.setVisible(False)
-        self.btn_full = tool("", "전체화면 (F, 더블클릭)", QStyle.StandardPixmap.SP_TitleBarMaxButton)
+        self.btn_audio = tool("audio", "소리만 재생 (Ctrl+B)", checkable=True)
+        self.btn_audio.toggled.connect(self.audio_only_toggled)
+        self.btn_full = tool("full", "전체화면 (F, 더블클릭)")
         self.btn_full.clicked.connect(self.fullscreen_clicked)
 
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(14, 8, 14, 8)
-        lay.setSpacing(8)
+        lay.setContentsMargins(16, 8, 16, 8)
+        lay.setSpacing(6)
         for w in (self.btn_back, self.btn_play, self.btn_fwd):
             lay.addWidget(w)
+        lay.addSpacing(4)
         lay.addWidget(self.slider, 1)
         lay.addWidget(self.lbl_time)
         lay.addWidget(self.btn_mute)
         lay.addWidget(self.vol)
+        lay.addSpacing(6)
         lay.addWidget(self.speed)
-        lay.addWidget(self.btn_subs)
-        lay.addWidget(self.btn_shot)
-        lay.addWidget(self.btn_vr)
-        lay.addWidget(self.btn_vr_reset)
-        lay.addWidget(self.btn_full)
+        for w in (self.btn_subs, self.btn_shot, self.btn_rec, self.btn_vr, self.btn_vr_reset, self.btn_audio,
+                  self.btn_full):
+            lay.addWidget(w)
 
     # ------------------------------------------------------------------
     relative_seek = Signal(float)
@@ -156,7 +197,7 @@ class ControlBar(QWidget):
 
     def _on_slider_moved(self, value: int) -> None:
         t = value / SLIDER_MAX * self._duration
-        self.lbl_time.setText(f"{fmt_time(t)} / {fmt_time(self._duration)}")
+        self._show_time(t)
         self.seek_preview.emit(t)
 
     def _on_slider_released(self) -> None:
@@ -171,7 +212,32 @@ class ControlBar(QWidget):
             return
         if self._duration > 0:
             self.slider.setValue(int(t / self._duration * SLIDER_MAX))
-        self.lbl_time.setText(f"{fmt_time(t)} / {fmt_time(self._duration)}")
+        self._show_time(t)
+
+    def _show_time(self, t: float) -> None:
+        self.position = t
+        self.lbl_time.setText(f"<b style='color:#ffffff'>{fmt_time(t)}</b> / {fmt_time(self._duration)}")
+
+    position = 0.0
+
+    @property
+    def duration(self) -> float:
+        return self._duration
+
+    def set_marks(self, a: float | None, b: float | None) -> None:
+        """녹화 구간(초)을 탐색바에 표시."""
+        if a is None or b is None or self._duration <= 0:
+            self.slider.set_marks(None, None)
+        else:
+            self.slider.set_marks(a / self._duration, b / self._duration)
+
+    def set_audio_only(self, on: bool) -> None:
+        self.btn_audio.blockSignals(True)
+        self.btn_audio.setChecked(on)
+        self.btn_audio.blockSignals(False)
+
+    def set_fullscreen(self, on: bool) -> None:
+        self.btn_full.setIcon(icons.icon("exitfull" if on else "full", ICON))
 
     def set_duration(self, d: float) -> None:
         self._duration = max(0.0, d)
@@ -179,7 +245,7 @@ class ControlBar(QWidget):
 
     def set_paused(self, paused: bool) -> None:
         self._paused = paused
-        self.btn_play.setText("▶" if paused else "❚❚")
+        self.btn_play.setIcon(icons.icon("play" if paused else "pause", "#1b1206"))
 
     def set_volume(self, v: int) -> None:
         self.vol.blockSignals(True)
@@ -187,8 +253,7 @@ class ControlBar(QWidget):
         self.vol.blockSignals(False)
 
     def set_muted(self, muted: bool) -> None:
-        icon = QStyle.StandardPixmap.SP_MediaVolumeMuted if muted else QStyle.StandardPixmap.SP_MediaVolume
-        self.btn_mute.setIcon(self.style().standardIcon(icon))
+        self.btn_mute.setIcon(icons.icon("mute" if muted else "volume", "#ef4444" if muted else ICON))
 
     def set_vr(self, on: bool) -> None:
         self.btn_vr.blockSignals(True)

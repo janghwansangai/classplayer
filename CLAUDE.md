@@ -13,7 +13,7 @@
 - 테스트: `CLASSPLAYER_TEST_MAX_HEIGHT=1080 uv run python tests/perf.py <유튜브링크> /tmp/out 24` 로 스트리밍 드롭 측정.
 - 패키징: `./packaging/build_mac.sh` → `dist/ClassPlayer.app` (+zip). spec은 `packaging/classplayer.spec`. 번들에는 libmpv(+libav 의존성), ffmpeg, ffprobe, deno가 들어간다. 자가 점검은 `CLASSPLAYER_SELFTEST=<파일|링크>` 환경변수로 앱을 띄우면 6초 뒤 JSON 한 줄 출력 후 종료. 번들 실행 시 bootstrap이 Homebrew 경로를 제외하고, build 스크립트가 `libmpv.dylib` 링크를 만든다(python-mpv가 그 이름으로 찾음).
 - 윈도우 빌드: `packaging/build_windows.bat` (미검증).
-- 디자인: 시안 A(밝은 교실형) 채택, QSS는 `ui/theme.py`. 전체화면에서는 컨트롤바를 stage 위 오버레이(property overlay=true, 어두운 유리)로 재부모화. 아이콘은 `packaging/icon.svg` → `packaging/make_icon.py`로 png/ico/icns 생성.
+- 디자인: 2026-11-14부터 시안 C(스튜디오 다크, 앰버 포인트) 채택. QSS·팔레트는 `ui/theme.py`(apply_palette), 아이콘은 `ui/icons.py`(SVG→QIcon, QtSvg). 시안 원본은 `design/ui_mockups_v2.html`. 영상 위 HUD 알약(hud/hudamber)과 360도 나침반(Compass)은 stage 자식 위젯. 아이콘은 `packaging/icon.svg` → `packaging/make_icon.py`로 png/ico/icns 생성.
 - 라이브러리 목록 썸네일/길이: `library/library.py`의 LibraryThumbs(ffmpeg/ffprobe, 캐시). 탐색 미리보기: `player/thumbnails.py`(로컬 ffmpeg 키프레임, 유튜브 스토리보드).
 - 듀얼 피쉬아이(insv) 투영: 셰이더 u_projection=2, FFmpeg dfisheye 규약(왼쪽 원=뒤, 오른쪽 원=앞)을 기본으로 하고 메뉴에서 좌우 바꾸기/화각 조절. 2026-11-13 합성 영상으로 6방향 검증.
 - 안내: MainWindow.notify()가 토스트+상태줄, _show_loading()이 영상 위 로딩 문구(paused-for-cache 관찰로 버퍼링 표시). 윈도우 기본 플레이어 등록은 platform_win.py(HKCU 레지스트리).
@@ -22,3 +22,8 @@
 - DJI Osmo/Avata 360 `.osv`(원본)·`.lrf`(프록시): 두 원이 나란한 2:1 듀얼 피쉬아이, 확장자로 감지.
 - 구글 드라이브 등 '자리만 있는' 클라우드 파일: bootstrap.is_cloud_placeholder()(맥 SF_DATALESS, 윈도우 OFFLINE/RECALL 속성)로 감지 → 열 때 "내려받고 재생/그냥 재생" 묻고, 라이브러리 썸네일은 건너뜀(안 그러면 폴더 전체를 내려받음).
 - 전체화면 컨트롤바: 맥에서 QOpenGLWidget 위에 자식 위젯을 겹치면 흐릿하게 합성되는 문제(배속 글자 안 보임)가 있어 2026-11-14부터 영상 아래 어두운 띠(레이아웃 안)로 두고 자동 숨김만 한다. 겹치기 모드는 CLASSPLAYER_FS_OVERLAY=1. paintGL 끝에 _restore_gl_state()로 mpv가 바꾼 GL 상태를 되돌린다.
+- 녹화·녹음: `record.py`. 로컬 파일은 LocalRecordJob(ffmpeg, 기본 -c copy, '정확하게'는 libx264 재인코딩, 소리만은 MP3), 링크는 make_url_record_job(yt-dlp download_ranges, 구간 녹화는 SponsorBlock 제거 끔). 파일 이름에 "[녹화 …]/[녹음 …]"이 붙고 라이브러리 '녹화·녹음' 칩이 이 표시로 거른다. 탐색바 빨간 띠는 ClickSlider.set_marks. 단축키 Ctrl+R, I/O. QTimeEdit은 Fusion+QSS에서 입력칸 폭이 1px이 되는 문제가 있어 TimeField(QLineEdit 입력 틀)를 쓴다.
+- 유튜브 로딩: StreamResolver.warm_up(앱 시작 시 yt-dlp·deno 예열), prefetch(클립보드 감지·입력칸 타이핑 시), 20분 캐시. 2026-11-14 측정: 미리 풀기 없이 링크→재생 약 3.4초(주소 풀기 2.7초), 복사 후 몇 초 뒤 누르면 0.2초.
+- 업데이트: `updater.py`가 GitHub releases/latest를 보고 플랫폼 zip을 받아 풀고(맥 ditto), 앱 종료 뒤 셸/배치 스크립트가 교체·재실행. 번들 실행일 때만 자동 설치, 개발 실행은 릴리스 페이지를 연다. 버전은 `classplayer/__init__.py`의 __version__ 과 pyproject 를 함께 올리고 태그 vX.Y.Z 로 릴리스. 시작 8초 뒤 하루 한 번 조용히 확인. 윈도우 교체 스크립트는 미검증.
+- 오류 신고: 도움말 > 오류 신고가 Apps Script 주소에 app=class-player, v, where(화면 이름만, 파일명·링크 제외)를 붙여 브라우저로 연다. 비밀 키 없음.
+- CI 주의: 2026-11-13 v0.3.0 태그 빌드에서 macOS 잡이 러너를 못 받아 15분 뒤 취소됨(코드 문제 아님) → `gh run rerun <id> --failed`.

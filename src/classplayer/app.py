@@ -7,22 +7,29 @@ import sys
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, QPoint, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QDragEnterEvent, QDropEvent, QKeySequence, QSurfaceFormat
-from PySide6.QtWidgets import (QAbstractSpinBox, QFrame, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-                               QDockWidget, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
-                               QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QTextEdit,
-                               QToolButton, QVBoxLayout, QWidget)
+import math
+import urllib.parse
 
-from classplayer import bootstrap
-from classplayer.bootstrap import APP_NAME, VIDEO_EXTENSIONS
+from PySide6.QtCore import QEvent, QObject, QPoint, QRectF, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import (QAction, QActionGroup, QCloseEvent, QColor, QDesktopServices, QDragEnterEvent, QDropEvent,
+                           QIcon, QKeySequence, QPainter, QPen, QSurfaceFormat)
+from PySide6.QtWidgets import (QAbstractSpinBox, QButtonGroup, QFrame, QApplication, QCheckBox, QComboBox, QDialog,
+                               QDialogButtonBox, QDockWidget, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
+                               QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QProgressDialog, QPushButton,
+                               QRadioButton, QScrollArea, QTextEdit, QToolButton, QVBoxLayout, QWidget)
+
+from classplayer import __version__, bootstrap
+from classplayer.bootstrap import APP_NAME, AUDIO_EXTENSIONS, MEDIA_EXTENSIONS, VIDEO_EXTENSIONS
+from classplayer.record import LocalRecordJob, LocalRecordRequest, make_url_record_job
+from classplayer.ui import icons
+from classplayer.updater import RELEASES_PAGE, Updater, can_self_install, is_newer
 from classplayer.library.library import LibraryPanel
 from classplayer.player.controls import ControlBar
 from classplayer.player.mpv_widget import MpvWidget
 from classplayer.player.thumbnails import ThumbnailProvider
 from classplayer.player.controls import fmt_time
 from classplayer.settings import Settings
-from classplayer.ui.theme import QSS
+from classplayer.ui.theme import AMBER, QSS, apply_palette
 from classplayer.youtube.common import is_url, is_youtube_url, youtube_video_id
 from classplayer.youtube.download import PRESETS, DownloadJob, DownloadRequest
 from classplayer.youtube.probe import probe_spherical
@@ -39,6 +46,8 @@ S      자막 전환            A     오디오 트랙 전환
 [ / ]  재생 속도            , / . 한 프레임 이동
 ⌘L     링크 입력창          ⌘F    라이브러리 검색
 ⌘O     파일 열기            ⌘D    다운로드
+⌘R     녹화·녹음            I / O 녹화 구간 시작 / 끝을 지금 위치로
+⌘B     소리만 재생
 """
 
 
@@ -109,12 +118,12 @@ class DownloadItem(QWidget):
     def __init__(self, job: DownloadJob, parent=None) -> None:
         super().__init__(parent)
         self.job = job
-        self.title = QLabel(job.req.url)
+        self.title = QLabel(getattr(job, "display", "") or job.req.url)
         self.title.setWordWrap(True)
         self.bar = QProgressBar()
         self.bar.setRange(0, 1000)
         self.status = QLabel("대기 중")
-        self.status.setStyleSheet("color: gray;")
+        self.status.setObjectName("muted")
         self.btn = QToolButton()
         self.btn.setText("취소")
         self.btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -127,7 +136,7 @@ class DownloadItem(QWidget):
         lay.addWidget(self.title)
         lay.addLayout(row)
         lay.addWidget(self.status)
-        self.setStyleSheet("DownloadItem { border-bottom: 1px solid palette(mid); }")
+        self.setStyleSheet("DownloadItem { border-bottom: 1px solid #2a2b31; }")
         job.title_known.connect(self.title.setText)
         job.progress.connect(self._on_progress)
         job.finished.connect(self._on_finished)
@@ -164,7 +173,9 @@ class DownloadPanel(QWidget):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self._jobs: list[DownloadJob] = []
+        self._jobs: list = []
+        self.setObjectName("downloads")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.inner = QWidget()
         self.inner_lay = QVBoxLayout(self.inner)
         self.inner_lay.setContentsMargins(0, 0, 0, 0)
@@ -196,6 +207,9 @@ class DownloadPanel(QWidget):
             if j.is_running():
                 j.cancel()
 
+    def has_running(self) -> bool:
+        return any(j.is_running() for j in self._jobs)
+
 
 class _ProbeNotifier(QObject):
     result = Signal(str, object)
@@ -212,8 +226,8 @@ class SeekPreview(QFrame):
     def __init__(self, parent=None) -> None:
         super().__init__(parent, Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        self.setStyleSheet("QFrame { background: rgba(20,20,20,230); border-radius: 8px; }"
-                           "QLabel { color: white; }")
+        self.setStyleSheet("QFrame { background: #101114; border: 1px solid #3a3b44; border-radius: 9px; }"
+                           "QLabel { color: white; border: none; }")
         self.img = QLabel()
         self.img.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.img.setFixedSize(224, 126)
@@ -249,9 +263,9 @@ class Toast(QFrame):
     def __init__(self, parent) -> None:
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setStyleSheet("Toast { background: rgba(17,24,39,0.92); border-radius: 10px; }")
+        self.setStyleSheet("Toast { background: #101114; border: 1px solid #2a2b31; border-radius: 10px; }")
         self.label = QLabel("")
-        self.label.setStyleSheet("color: white; font-size: 14px;")
+        self.label.setStyleSheet("color: #e7e8ec; font-size: 13px; border: none;")
         self.btn = QPushButton("")
         self.btn.setObjectName("toastbtn")
         self.btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -299,10 +313,10 @@ class ClipboardBanner(QFrame):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.url = ""
-        self.setStyleSheet("ClipboardBanner { background: #fff6d6; border-bottom: 1px solid #e6d9a8; }")
+        self.setObjectName("banner")
         self.label = QLabel("")
-        self.label.setStyleSheet("color: #5a4a00;")
         b_play = QPushButton("바로 재생")
+        b_play.setObjectName("primary")
         b_dl = QPushButton("다운로드")
         b_close = QToolButton()
         b_close.setText("✕")
@@ -325,6 +339,233 @@ class ClipboardBanner(QFrame):
         short = url if len(url) < 70 else url[:67] + "…"
         self.label.setText(f"복사해 둔 유튜브 링크가 있습니다: {short}")
         self.show()
+
+
+class Compass(QWidget):
+    """360도 모드에서 오른쪽 위에 뜨는 시점 나침반. 호박색 부채꼴이 지금 보는 방향과 시야각."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setFixedSize(76, 76)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.yaw = 0.0
+        self.fov = math.radians(90)
+        self.hide()
+
+    def set_view(self, yaw: float, fov: float) -> None:
+        self.yaw, self.fov = yaw, fov
+        self.update()
+
+    def paintEvent(self, _e) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = QRectF(1, 1, self.width() - 2, self.height() - 2)
+        p.setPen(QPen(QColor(255, 255, 255, 40), 1))
+        p.setBrush(QColor(16, 17, 20, 200))
+        p.drawEllipse(r)
+        inner = r.adjusted(12, 12, -12, -12)
+        p.setPen(QPen(QColor(255, 255, 255, 70), 1, Qt.PenStyle.DashLine))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawEllipse(inner)
+        # Qt 각도: 3시 방향이 0, 반시계 + (1/16도 단위). 정면(yaw=0)은 12시.
+        span = math.degrees(self.fov)
+        center = 90 - math.degrees(self.yaw)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(245, 158, 11, 210))
+        wedge = r.adjusted(18, 18, -18, -18)
+        p.drawPie(wedge, int((center - span / 2) * 16), int(span * 16))
+        p.setBrush(QColor("#fbbf24"))
+        c = r.center()
+        p.drawEllipse(c, 3, 3)
+        p.setPen(QColor(255, 255, 255, 150))
+        f = p.font()
+        f.setPixelSize(9)
+        f.setBold(True)
+        p.setFont(f)
+        p.drawText(QRectF(c.x() - 10, r.top() + 1, 20, 12), Qt.AlignmentFlag.AlignCenter, "앞")
+        p.end()
+
+
+class TimeField(QLineEdit):
+    """시:분:초 입력칸 (00:00:00 틀)."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setInputMask("99:99:99")
+        self.setMinimumWidth(110)
+        self.setMaximumWidth(130)
+
+    def seconds(self) -> float:
+        parts = [int(p) if p.strip().isdigit() else 0 for p in self.text().split(":")]
+        while len(parts) < 3:
+            parts.append(0)
+        h, m, sec = parts[:3]
+        return float(h * 3600 + m * 60 + sec)
+
+    def set_seconds(self, sec: float) -> None:
+        s = int(round(max(0.0, sec)))
+        h, rem = divmod(s, 3600)
+        m, ss = divmod(rem, 60)
+        self.setText(f"{min(h, 99):02d}:{m:02d}:{ss:02d}")
+
+
+class RecordDialog(QDialog):
+    """녹화·녹음 창. 열어 둔 채로 영상을 움직이며 '지금 위치'로 시작·끝을 정할 수 있다."""
+
+    marks_changed = Signal(object, object)       # 시작, 끝 (초) 또는 None
+    start_requested = Signal(dict)
+
+    def __init__(self, parent, *, title: str, duration: float, position: float, is_link: bool,
+                 is_local_video: bool, out_dir: str) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("녹화 · 녹음")
+        self.setModal(False)
+        self.setMinimumWidth(500)
+        self.duration = duration
+        self._pos_fn = None
+
+        head = QLabel(f"<b style='font-size:15px'>지금 보는 영상을 파일로 저장합니다</b><br>"
+                      f"<span style='color:#8b8e99'>{title}</span>")
+        head.setWordWrap(True)
+
+        self.r_video = QRadioButton("영상 녹화")
+        self.r_audio = QRadioButton("소리만 녹음 (MP3)")
+        self.r_video.setChecked(True)
+        g1 = QButtonGroup(self)
+        g1.addButton(self.r_video)
+        g1.addButton(self.r_audio)
+        kind = QHBoxLayout()
+        kind.addWidget(self.r_video)
+        kind.addWidget(self.r_audio)
+        kind.addStretch(1)
+
+        self.r_all = QRadioButton("전체")
+        self.r_part = QRadioButton("구간 정하기")
+        self.r_part.setChecked(True)
+        g2 = QButtonGroup(self)
+        g2.addButton(self.r_all)
+        g2.addButton(self.r_part)
+        rng = QHBoxLayout()
+        rng.addWidget(self.r_all)
+        rng.addWidget(self.r_part)
+        rng.addStretch(1)
+
+        self.t_start = TimeField()
+        self.t_end = TimeField()
+        end0 = min(duration, position + 30) if duration > 0 else position + 30
+        self.t_start.set_seconds(position)
+        self.t_end.set_seconds(end0)
+        for te in (self.t_start, self.t_end):
+            te.textChanged.connect(self._changed)
+        b_s = QPushButton("지금 위치")
+        b_e = QPushButton("지금 위치")
+        b_s.setToolTip("재생 중인 위치를 시작으로 (단축키 I)")
+        b_e.setToolTip("재생 중인 위치를 끝으로 (단축키 O)")
+        b_s.clicked.connect(lambda: self.set_start_now())
+        b_e.clicked.connect(lambda: self.set_end_now())
+        times = QFormLayout()
+        row_s = QHBoxLayout()
+        row_s.addWidget(self.t_start)
+        row_s.addWidget(b_s)
+        row_s.addStretch(1)
+        row_e = QHBoxLayout()
+        row_e.addWidget(self.t_end)
+        row_e.addWidget(b_e)
+        row_e.addStretch(1)
+        times.addRow("시작", row_s)
+        times.addRow("끝", row_e)
+        self.lbl_len = QLabel("")
+        self.lbl_len.setObjectName("muted")
+        times.addRow("", self.lbl_len)
+        self.part_box = QWidget()
+        self.part_box.setLayout(times)
+
+        self.accurate = QCheckBox("정확한 시각에 맞춰 자르기 (다시 인코딩, 시간이 더 걸림)")
+        self.accurate.setToolTip("끄면 몇 초 만에 저장되지만 시작이 앞쪽 장면 전환 지점에 맞춰 1~2초 이를 수 있습니다")
+        self.accurate.setVisible(is_local_video)
+        note = QLabel(("유튜브·드라이브 영상은 해당 부분만 다시 받아서 저장합니다 (인터넷 필요)."
+                       if is_link else "원본 파일에서 잘라 저장합니다. 인터넷이 필요 없습니다.")
+                      + f"<br>저장 위치: <b>{out_dir}</b> · 라이브러리 <b>녹화·녹음</b> 목록에 나타납니다.")
+        note.setWordWrap(True)
+        note.setObjectName("muted")
+
+        self.btn_go = QPushButton("녹화 시작")
+        self.btn_go.setObjectName("primary")
+        self.btn_go.clicked.connect(self._go)
+        b_close = QPushButton("닫기")
+        b_close.clicked.connect(self.close)
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        btns.addWidget(b_close)
+        btns.addWidget(self.btn_go)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 18, 20, 16)
+        lay.setSpacing(10)
+        lay.addWidget(head)
+        lay.addSpacing(4)
+        lay.addLayout(kind)
+        lay.addLayout(rng)
+        lay.addWidget(self.part_box)
+        lay.addWidget(self.accurate)
+        lay.addWidget(note)
+        lay.addLayout(btns)
+
+        for rb in (self.r_all, self.r_part, self.r_video, self.r_audio):
+            rb.toggled.connect(self._changed)
+        if duration <= 0:
+            self.r_all.setEnabled(False)
+        self._changed()
+
+    def set_position_source(self, fn) -> None:
+        self._pos_fn = fn
+
+    def set_start_now(self) -> None:
+        if self._pos_fn:
+            self.r_part.setChecked(True)
+            self.t_start.set_seconds(self._pos_fn())
+            if self.t_end.seconds() <= self.t_start.seconds():
+                end = self._pos_fn() + 30
+                self.t_end.set_seconds(min(end, self.duration) if self.duration > 0 else end)
+
+    def set_end_now(self) -> None:
+        if self._pos_fn:
+            self.r_part.setChecked(True)
+            self.t_end.set_seconds(self._pos_fn())
+
+    def range(self) -> tuple[float | None, float | None]:
+        if self.r_all.isChecked():
+            return None, None
+        a, b = self.t_start.seconds(), self.t_end.seconds()
+        if self.duration > 0:
+            b = min(b, self.duration)
+        return a, b
+
+    def _changed(self, *_a) -> None:
+        if not hasattr(self, "btn_go"):      # 만드는 도중 시간칸 신호가 먼저 올 때
+            return
+        part = self.r_part.isChecked()
+        self.part_box.setEnabled(part)
+        a, b = self.range()
+        audio = self.r_audio.isChecked()
+        self.accurate.setEnabled(not audio)
+        self.btn_go.setText("녹음 시작" if audio else "녹화 시작")
+        if part:
+            ok = b is not None and a is not None and b - a >= 0.5
+            self.lbl_len.setText(f"길이 {fmt_time(b - a)}" if ok else "끝이 시작보다 뒤여야 합니다")
+            self.btn_go.setEnabled(ok)
+        else:
+            self.btn_go.setEnabled(True)
+        self.marks_changed.emit(a, b)
+
+    def _go(self) -> None:
+        a, b = self.range()
+        self.start_requested.emit({"start": a, "end": b, "audio": self.r_audio.isChecked(),
+                                   "accurate": self.accurate.isChecked() and self.accurate.isVisible()})
+
+    def closeEvent(self, e) -> None:
+        self.marks_changed.emit(None, None)
+        super().closeEvent(e)
 
 
 # ====================================================================== 메인 창
@@ -366,33 +607,44 @@ class MainWindow(QMainWindow):
         self.controls.set_volume(self.settings.volume)
 
         # --- 링크 입력줄
-        logo = QLabel("▶")
+        logo = QLabel()
         logo.setObjectName("logo")
         logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        logo.setPixmap(icons.pixmap("play", "#1b1206", 14))
+        brand = QLabel("ClassPlayer")
+        brand.setObjectName("brand")
         self.url_edit = QLineEdit()
         self.url_edit.setObjectName("url")
-        self.url_edit.setPlaceholderText("유튜브 링크를 붙여넣거나 파일을 끌어다 놓으세요")
+        self.url_edit.setPlaceholderText("유튜브 링크를 붙여넣거나 파일을 끌어다 놓으세요 (Enter로 재생)")
         self.url_edit.setClearButtonEnabled(True)
+        self.url_edit.addAction(QIcon(icons.pixmap("link", "#8b8e99", 16)), QLineEdit.ActionPosition.LeadingPosition)
         self.url_edit.returnPressed.connect(self.play_from_url_bar)
-        btn_paste = QPushButton("붙여넣고 재생")
-        btn_paste.setObjectName("primary")
-        btn_paste.setToolTip("복사한 링크를 바로 재생 (⌘V)")
-        btn_paste.clicked.connect(self.play_from_clipboard)
-        btn_play = QPushButton("재생")
-        btn_play.clicked.connect(self.play_from_url_bar)
-        btn_dl = QPushButton("다운로드…")
-        btn_dl.clicked.connect(self.open_download_dialog)
-        btn_open = QPushButton("파일")
-        btn_open.clicked.connect(self.open_file_dialog)
-        for b in (btn_paste, btn_play, btn_dl, btn_open):
+        self.url_edit.textEdited.connect(self._on_url_typed)
+
+        def topbtn(text: str, name: str, color: str = "#e7e8ec") -> QPushButton:
+            b = QPushButton(text)
+            b.setIcon(QIcon(icons.pixmap(name, color, 16)))
+            b.setIconSize(QSize(16, 16))
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            return b
+
+        btn_paste = topbtn("붙여넣고 재생", "play", "#1b1206")
+        btn_paste.setObjectName("primary")
+        btn_paste.setToolTip("복사한 링크를 바로 재생 (⌘V). 입력칸에 쓴 링크가 있으면 그것을 재생")
+        btn_paste.clicked.connect(self.play_from_clipboard)
+        btn_dl = topbtn("미리 받기", "download")
+        btn_dl.setToolTip("수업 전에 유튜브 영상을 파일로 받아 두기 (⌘D)")
+        btn_dl.clicked.connect(self.open_download_dialog)
+        btn_open = topbtn("파일", "folder")
+        btn_open.clicked.connect(self.open_file_dialog)
         urlrow = QHBoxLayout()
-        urlrow.setContentsMargins(14, 10, 14, 10)
+        urlrow.setContentsMargins(14, 9, 14, 9)
         urlrow.setSpacing(10)
         urlrow.addWidget(logo)
+        urlrow.addWidget(brand)
+        urlrow.addSpacing(6)
         urlrow.addWidget(self.url_edit, 1)
         urlrow.addWidget(btn_paste)
-        urlrow.addWidget(btn_play)
         urlrow.addWidget(btn_dl)
         urlrow.addWidget(btn_open)
         self.url_bar = QWidget()
@@ -420,6 +672,27 @@ class MainWindow(QMainWindow):
         self.loading.setObjectName("loading")
         self.loading.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.loading.hide()
+        self.hud = QWidget(self.stage)
+        self.hud.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        hl = QHBoxLayout(self.hud)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setSpacing(6)
+        self.hud_vr = QLabel("")
+        self.hud_vr.setObjectName("hudamber")
+        self.hud_codec = QLabel("")
+        self.hud_codec.setObjectName("hud")
+        self.hud_speed = QLabel("")
+        self.hud_speed.setObjectName("hudamber")
+        for w in (self.hud_vr, self.hud_codec, self.hud_speed):
+            hl.addWidget(w)
+            w.hide()
+        self.hud.move(16, 14)
+        self.hud.hide()
+        self._hud_timer = QTimer(self)
+        self._hud_timer.setSingleShot(True)
+        self._hud_timer.setInterval(4000)
+        self._hud_timer.timeout.connect(self._hide_hud_info)
+        self.compass = Compass(self.stage)
         self._audio_only = False
         v.addWidget(self.stage, 1)
         v.addWidget(self.controls)
@@ -448,7 +721,7 @@ class MainWindow(QMainWindow):
         # --- 상태 표시줄
         self.lbl_title = QLabel("")
         self.lbl_info = QLabel("")
-        self.lbl_info.setStyleSheet("color: gray;")
+        self.lbl_info.setObjectName("muted")
         self.lbl_vr = QLabel("")
         self.statusBar().addWidget(self.lbl_title, 1)
         self.statusBar().addPermanentWidget(self.lbl_vr)
@@ -464,7 +737,9 @@ class MainWindow(QMainWindow):
             lambda vid, n: self.statusBar().showMessage(f"SponsorBlock: 건너뛸 구간 {n}개", 3000) if n else None)
 
         # --- 유튜브 주소 풀기
-        self.resolver = StreamResolver(self.js_runtime, self.settings.stream_max_height)
+        self.resolver = StreamResolver(self.js_runtime, self.settings.stream_max_height,
+                                       js_runtime_path=bootstrap.find_tool(self.js_runtime) if self.js_runtime else None)
+        self.resolver.warm_up()
         self.resolver.resolved.connect(self._on_stream_resolved)
         self.resolver.failed.connect(self._on_stream_failed)
 
@@ -487,6 +762,18 @@ class MainWindow(QMainWindow):
         self._last_clip = ""
         QApplication.instance().applicationStateChanged.connect(self._on_app_state)
         QApplication.clipboard().dataChanged.connect(self._check_clipboard)
+
+        # --- 녹화 · 업데이트
+        self._rec_dialog: RecordDialog | None = None
+        self.updater = Updater(self)
+        self.updater.checked.connect(self._on_update_checked)
+        self.updater.progress.connect(self._on_update_progress)
+        self.updater.prepared.connect(self._on_update_prepared)
+        self.updater.failed.connect(self._on_update_failed)
+        self._update_silent = True
+        self._update_dialog: QProgressDialog | None = None
+        self._release = None
+        QTimer.singleShot(8000, self._auto_check_update)
 
         self._connect_player()
         self._build_menus()
@@ -514,7 +801,7 @@ class MainWindow(QMainWindow):
         p.wheel_scrolled.connect(lambda d: self._nudge_volume(5 * d))
         p.vr_changed.connect(self._on_vr_changed)
         p.buffering_changed.connect(self._on_buffering)
-        self.resolver.started.connect(lambda _u: self._show_loading("유튜브에서 영상 정보를 가져오는 중…\n보통 5~15초 걸립니다"))
+        self.resolver.started.connect(self._on_resolve_started)
 
         c.play_clicked.connect(p.toggle_pause)
         c.relative_seek.connect(p.seek_relative)
@@ -527,6 +814,9 @@ class MainWindow(QMainWindow):
         c.vr_reset_clicked.connect(p.vr_reset)
         c.fullscreen_clicked.connect(self.toggle_fullscreen)
         c.screenshot_clicked.connect(self.take_screenshot)
+        c.record_clicked.connect(self.open_record_dialog)
+        c.audio_only_toggled.connect(lambda on: self.a_audio_only.setChecked(on))
+        c.speed_changed.connect(self._show_speed_hud)
 
     def _build_menus(self) -> None:
         mb = self.menuBar()
@@ -562,6 +852,11 @@ class MainWindow(QMainWindow):
         act(m_play, "화면 캡처", self.take_screenshot)
         self.a_sponsor = act(m_play, "협찬 구간 자동 건너뛰기 (SponsorBlock)", self._toggle_sponsor, checkable=True, checked=True)
         self.a_audio_only = act(m_play, "소리만 재생 (영상 끄기)", self.toggle_audio_only, "Ctrl+B", checkable=True)
+        m_play.addSeparator()
+        act(m_play, "녹화 · 녹음…", self.open_record_dialog, "Ctrl+R")
+        act(m_play, "녹화 구간 시작 = 지금 위치 (I)", lambda: self._mark_now(True))
+        act(m_play, "녹화 구간 끝 = 지금 위치 (O)", lambda: self._mark_now(False))
+        act(m_play, "녹화·녹음 목록 보기", self.show_recordings)
 
         m_view = mb.addMenu("보기")
         act(m_view, "전체화면", self.toggle_fullscreen, "Ctrl+F")
@@ -620,6 +915,9 @@ class MainWindow(QMainWindow):
         m_help = mb.addMenu("도움말")
         act(m_help, "단축키", lambda: QMessageBox.information(self, "단축키", f"<pre>{HELP_TEXT}</pre>"))
         act(m_help, "환경 정보", self._show_env)
+        m_help.addSeparator()
+        act(m_help, "업데이트 확인…", lambda: self.check_update(silent=False))
+        act(m_help, "오류 신고…", self.report_bug)
 
     # ------------------------------------------------------------------ 열기/재생
     def play_from_url_bar(self) -> None:
@@ -629,7 +927,7 @@ class MainWindow(QMainWindow):
         self.player.setFocus()
 
     def open_file_dialog(self) -> None:
-        exts = " ".join(f"*{e}" for e in sorted(VIDEO_EXTENSIONS))
+        exts = " ".join(f"*{e}" for e in sorted(MEDIA_EXTENSIONS))
         path, _ = QFileDialog.getOpenFileName(self, "영상 파일 열기", "", f"영상 파일 ({exts});;모든 파일 (*)")
         if path:
             self.open_target(path)
@@ -784,6 +1082,248 @@ class MainWindow(QMainWindow):
         elif path.lower().endswith((".insv", ".insp")) and getattr(info, "video_streams", 1) == 1:
             self.notify("이 insv 파일에는 렌즈 하나의 영상만 들어 있습니다. 짝이 되는 _10_ 파일과 함께 Insta360 Studio로 합쳐 주세요", 9000)
 
+    # ------------------------------------------------------------------ 영상 위 상태 표시(HUD)
+    def _refresh_hud(self) -> None:
+        vr_on = self.player.vr_enabled
+        v = self.player.vr
+        self.hud_vr.setText(f"360° · 시야 {math.degrees(v.fov):.0f}°" if vr_on else "")
+        self.hud_vr.setVisible(vr_on)
+        any_shown = any(not w.isHidden() for w in (self.hud_vr, self.hud_codec, self.hud_speed))
+        self.hud.adjustSize()
+        self.hud.setVisible(any_shown and bool(self._current))
+        self.hud.raise_()
+        self.compass.setVisible(vr_on)
+        if vr_on:
+            self.compass.set_view(v.yaw, v.fov)
+            self.compass.move(self.stage.width() - self.compass.width() - 16, 14)
+            self.compass.raise_()
+
+    def _show_hud_info(self) -> None:
+        """파일을 연 직후 몇 초 동안 코덱·해상도·디코딩 방식을 보여 준다."""
+        w, h = self.player.video_size
+        codec = self._codec.split(" ")[0].upper() if self._codec else ""
+        if not codec:
+            return
+        hw = "하드웨어" if self._hwdec and self._hwdec != "no" else "소프트웨어"
+        self.hud_codec.setText(" · ".join(x for x in (codec, f"{w}×{h}" if w else "", hw) if x))
+        self.hud_codec.show()
+        self._refresh_hud()
+        self._hud_timer.start()
+
+    def _hide_hud_info(self) -> None:
+        self.hud_codec.hide()
+        self._refresh_hud()
+
+    def _show_speed_hud(self, speed: float) -> None:
+        self.hud_speed.setText(f"{speed:g}×")
+        self.hud_speed.setVisible(abs(speed - 1.0) > 1e-3)
+        self._refresh_hud()
+
+    # ------------------------------------------------------------------ 유튜브 로딩
+    def _on_resolve_started(self, url: str) -> None:
+        if self.resolver.cached(url):
+            self._show_loading("영상을 여는 중…")
+        else:
+            self._show_loading("유튜브에서 영상 주소를 확인하는 중… (1/2)\n보통 3~5초 걸립니다")
+
+    def _on_url_typed(self, text: str) -> None:
+        t = text.strip()
+        if is_youtube_url(t):
+            self.resolver.prefetch(t)
+
+    # ------------------------------------------------------------------ 녹화 · 녹음
+    def _record_source(self) -> tuple[str, bool]:
+        """(원본, 링크 여부). 녹화할 수 없으면 ('', False)."""
+        cur = self._current
+        if not cur:
+            return "", False
+        if is_url(cur):
+            return cur, True
+        return (cur, False) if Path(cur).exists() else ("", False)
+
+    def open_record_dialog(self) -> None:
+        src, is_link = self._record_source()
+        if not src:
+            self.notify("먼저 영상을 열어 주세요. 열려 있는 영상의 전체나 일부를 파일로 저장합니다")
+            return
+        if self._rec_dialog is not None:
+            self._rec_dialog.show()
+            self._rec_dialog.raise_()
+            self._rec_dialog.activateWindow()
+            return
+        title = self.lbl_title.text() or Path(src).stem
+        dur = float(self.player.property("duration", 0.0) or 0.0)
+        pos = float(self.player.property("time-pos", 0.0) or 0.0)
+        local_video = not is_link and Path(src).suffix.lower() not in AUDIO_EXTENSIONS
+        dlg = RecordDialog(self, title=title, duration=dur, position=pos, is_link=is_link,
+                           is_local_video=local_video, out_dir=self.settings.download_dir)
+        dlg.set_position_source(lambda: float(self.player.property("time-pos", 0.0) or 0.0))
+        dlg.marks_changed.connect(self.controls.set_marks)
+        dlg.start_requested.connect(lambda opts, s=src, link=is_link, t=title, d=dur: self._start_record(s, link, t, d, opts))
+        dlg.finished.connect(lambda _r: setattr(self, "_rec_dialog", None))
+        dlg.destroyed.connect(lambda *_: self.controls.set_marks(None, None))
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self._rec_dialog = dlg
+        dlg.show()
+        dlg._changed()
+
+    def _mark_now(self, start: bool) -> None:
+        if self._rec_dialog is None:
+            self.open_record_dialog()
+        if self._rec_dialog is not None:
+            (self._rec_dialog.set_start_now if start else self._rec_dialog.set_end_now)()
+            self.notify("녹화 구간 시작을 지금 위치로 정했습니다" if start else "녹화 구간 끝을 지금 위치로 정했습니다", 2000)
+
+    def _start_record(self, src: str, is_link: bool, title: str, duration: float, o: dict) -> None:
+        out_dir = self.settings.download_dir
+        Path(out_dir).mkdir(parents=True, exist_ok=True)
+        a, b, audio = o.get("start"), o.get("end"), bool(o.get("audio"))
+        if is_link:
+            if not self.ffmpeg:
+                self.notify("ffmpeg 를 찾지 못해 링크 영상을 녹화할 수 없습니다", 6000)
+                return
+            job = make_url_record_job(src, title, out_dir, start=a, end=b, audio=audio, ffmpeg=self.ffmpeg,
+                                      js_runtime=self.js_runtime, remove_sponsors=self.a_sponsor.isChecked(),
+                                      sponsor_categories=tuple(self.settings.sponsorblock_categories))
+        else:
+            if not self.ffmpeg:
+                self.notify("ffmpeg 를 찾지 못해 녹화할 수 없습니다", 6000)
+                return
+            job = LocalRecordJob(LocalRecordRequest(src=src, out_dir=out_dir, title=title or Path(src).stem,
+                                                    start=a, end=b, audio=audio, accurate=bool(o.get("accurate")),
+                                                    duration=duration, ffmpeg=self.ffmpeg))
+        job.finished.connect(self._on_record_finished)
+        self.downloads.add_job(job)
+        self.dock_downloads.show()
+        kind = "녹음" if audio else "녹화"
+        span = "전체" if a is None else f"{fmt_time(a)} ~ {fmt_time(b or 0)}"
+        self.notify(f"{kind}을 시작했습니다 ({span}). 진행 상황은 오른쪽 '다운로드' 창에 보입니다", 4500)
+        if self._rec_dialog is not None:
+            self._rec_dialog.close()
+
+    def _on_record_finished(self, path: str) -> None:
+        if not path:
+            return
+        self.library.rescan()
+        self.notify(f"저장했습니다: {Path(path).name}", 7000, "목록 보기", self.show_recordings)
+
+    def show_recordings(self) -> None:
+        self.dock_library.show()
+        self.library.set_filter("rec")
+
+    # ------------------------------------------------------------------ 업데이트
+    def _auto_check_update(self) -> None:
+        import time as _time
+        last = float(self.settings.q.value("last_update_check", 0) or 0)
+        if _time.time() - last < 20 * 3600:
+            return
+        self.settings.q.setValue("last_update_check", _time.time())
+        self.check_update(silent=True)
+
+    def check_update(self, silent: bool = False) -> None:
+        self._update_silent = silent
+        if not silent:
+            self.statusBar().showMessage("업데이트 확인 중…", 3000)
+        self.updater.check()
+
+    def _on_update_checked(self, info, err: str) -> None:
+        if info is None:
+            if not self._update_silent:
+                QMessageBox.warning(self, "업데이트 확인", f"새 버전을 확인하지 못했습니다.\n인터넷 연결을 확인해 주세요.\n\n({err})")
+            return
+        if not is_newer(info.version):
+            if not self._update_silent:
+                QMessageBox.information(self, "업데이트 확인", f"지금 최신 버전을 쓰고 있습니다 (v{__version__}).")
+            return
+        self._release = info
+        if self._update_silent:
+            self.notify(f"새 버전 {info.version} 이 나왔습니다", 15000, "업데이트", self._ask_update)
+        else:
+            self._ask_update()
+
+    def _ask_update(self) -> None:
+        info = self._release
+        if info is None:
+            return
+        notes = info.notes.strip()
+        if len(notes) > 900:
+            notes = notes[:900] + "…"
+        box = QMessageBox(self)
+        box.setWindowTitle("업데이트")
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setText(f"<b>새 버전 {info.version}</b> 이 있습니다. (지금 v{__version__})")
+        auto = can_self_install() and bool(info.asset_url)
+        box.setInformativeText(("지금 받아서 설치하면 앱이 잠깐 닫혔다가 새 버전으로 다시 열립니다."
+                                if auto else "다운로드 페이지를 엽니다. 받은 zip 을 풀어 기존 앱과 바꿔 주세요.")
+                               + (f"\n\n바뀐 점:\n{notes}" if notes else ""))
+        b_go = box.addButton("지금 업데이트" if auto else "다운로드 페이지 열기", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("나중에", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(b_go)
+        box.exec()
+        if box.clickedButton() is not b_go:
+            return
+        if not auto:
+            QDesktopServices.openUrl(QUrl(info.page or RELEASES_PAGE))
+            return
+        dlg = QProgressDialog("새 버전 받는 중…", "취소", 0, 100, self)
+        dlg.setWindowTitle("업데이트")
+        dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        dlg.canceled.connect(self.updater.cancel)
+        dlg.show()
+        self._update_dialog = dlg
+        self.updater.download_and_prepare(info)
+
+    def _on_update_progress(self, pct: int, text: str) -> None:
+        if self._update_dialog is not None:
+            self._update_dialog.setValue(pct)
+            self._update_dialog.setLabelText(text)
+
+    def _on_update_prepared(self, new: str) -> None:
+        if self._update_dialog is not None:
+            self._update_dialog.close()
+            self._update_dialog = None
+        if self.downloads.has_running():
+            r = QMessageBox.question(self, "업데이트", "받는 중이거나 녹화 중인 작업이 있습니다. 취소하고 업데이트할까요?")
+            if r != QMessageBox.StandardButton.Yes:
+                self.notify("업데이트 준비가 끝났습니다. 다음에 '업데이트 확인'을 누르면 설치합니다", 6000)
+                return
+        try:
+            self.updater.launch_installer(new)
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.warning(self, "업데이트", f"설치를 시작하지 못했습니다: {e}")
+            return
+        self.notify("새 버전으로 바꾸는 중입니다. 잠시 후 다시 열립니다", 3000)
+        QTimer.singleShot(400, QApplication.instance().quit)
+
+    def _on_update_failed(self, msg: str) -> None:
+        if self._update_dialog is not None:
+            self._update_dialog.close()
+            self._update_dialog = None
+        QMessageBox.warning(self, "업데이트", f"업데이트를 받지 못했습니다.\n{msg}")
+
+    # ------------------------------------------------------------------ 오류 신고
+    BUG_REPORT_URL = ("https://script.google.com/macros/s/AKfycbxsRD7vRlEP9oKlvlDDPww8cYaDadTTIp1KrqYWSVU5qE5_"
+                      "gUh3bNUskBhHDlXH6FskvA/exec")
+
+    def _screen_name(self) -> str:
+        """오류 신고에 붙이는 현재 화면 이름. 파일 이름·링크 같은 개인 정보는 넣지 않는다."""
+        if self._rec_dialog is not None:
+            return "녹화 창"
+        if not self._current:
+            return "시작 화면"
+        kind = "유튜브 재생" if self._current_is_youtube else ("링크 재생" if is_url(self._current) else "파일 재생")
+        extra = [x for x, on in (("360도", self.player.vr_enabled), ("전체화면", self._fullscreen),
+                                 ("소리만", self._audio_only)) if on]
+        return " · ".join([kind] + extra)
+
+    def report_bug(self) -> None:
+        q = urllib.parse.urlencode({"app": "class-player", "v": __version__, "where": self._screen_name()})
+        QDesktopServices.openUrl(QUrl(f"{self.BUG_REPORT_URL}?{q}"))
+        self.statusBar().showMessage("브라우저에서 오류 신고 화면을 열었습니다", 4000)
+
     def _show_loading(self, text: str) -> None:
         self.loading.setText(text)
         self.loading.adjustSize()
@@ -804,6 +1344,7 @@ class MainWindow(QMainWindow):
     def _on_file_loaded(self, path: str) -> None:
         self.loading.hide()
         self._update_info()
+        QTimer.singleShot(600, self._show_hud_info)
         if self._audio_only:
             self.player.mpv["vid"] = "no"
         self.player.add_pending_subtitles()
@@ -829,8 +1370,11 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ 클립보드
     def play_from_clipboard(self) -> None:
         text = QApplication.clipboard().text().strip()
-        if is_url(text) or Path(text).exists():
+        typed = self.url_edit.text().strip()
+        if is_url(text) or (text and Path(text).exists()):
             self.open_target(text)
+        elif typed and typed != self._current and (is_url(typed) or Path(typed).exists()):
+            self.open_target(typed)
         else:
             self.statusBar().showMessage("복사해 둔 링크가 없습니다. 유튜브에서 주소를 복사한 뒤 눌러 주세요.", 5000)
 
@@ -843,6 +1387,7 @@ class MainWindow(QMainWindow):
         if text and text != self._last_clip and is_youtube_url(text) and text != self._current:
             self._last_clip = text
             self.banner.offer(text)
+            self.resolver.prefetch(text)   # 누르기 전에 미리 주소를 풀어 둔다
 
     def _banner_play(self, url: str) -> None:
         self.banner.hide()
@@ -923,6 +1468,7 @@ class MainWindow(QMainWindow):
         for k, a in self.a_stereo.items():
             a.setChecked(k == self.player.vr.stereo)
         self.lbl_vr.setText(self.player.vr.describe() if on else "")
+        self._refresh_hud()
         if on:
             self.notify("360도 모드: 드래그로 둘러보고 휠로 확대합니다 (3 키로 끔)")
         elif self.sender() is not None or not self._current:
@@ -947,6 +1493,7 @@ class MainWindow(QMainWindow):
     def _on_vr_changed(self, vr) -> None:
         if self.player.vr_enabled:
             self.lbl_vr.setText(vr.describe())
+        self._refresh_hud()
 
     def _toggle_hq(self, on: bool) -> None:
         self.settings.vr_hq = on
@@ -1012,6 +1559,7 @@ class MainWindow(QMainWindow):
 
     def toggle_audio_only(self, on: bool) -> None:
         self._audio_only = on
+        self.controls.set_audio_only(on)
         try:
             self.player.mpv["vid"] = "no" if on else "auto"
         except Exception:  # noqa: BLE001
@@ -1081,11 +1629,13 @@ class MainWindow(QMainWindow):
             self._set_controls_overlay(True)
             self.showFullScreen()
             self._fullscreen = True
+            self.controls.set_fullscreen(True)
             self._hide_timer.start()
         else:
             self._hide_timer.stop()
             self._set_controls_overlay(False)
             self.showNormal()
+            self.controls.set_fullscreen(False)
             self.menuBar().show()
             self.statusBar().show()
             self.url_bar.show()
@@ -1147,6 +1697,7 @@ class MainWindow(QMainWindow):
                                   (self.stage.height() - self.loading.height()) // 2)
             if self.toast.isVisible():
                 self.toast.move((self.stage.width() - self.toast.width()) // 2, 24)
+            self._refresh_hud()
             return False
         if e.type() == QEvent.Type.KeyPress and QApplication.activeWindow() is self:
             fw = QApplication.focusWidget()
@@ -1194,6 +1745,10 @@ class MainWindow(QMainWindow):
             self.set_vr(not p.vr_enabled)
         elif k == K.Key_R:
             p.vr_reset()
+        elif k == K.Key_I:
+            self._mark_now(True)
+        elif k == K.Key_O:
+            self._mark_now(False)
         elif k == K.Key_S:
             p.cycle_subtitles()
         elif k == K.Key_A:
@@ -1258,6 +1813,7 @@ def main() -> None:
     app.setApplicationName(APP_NAME)
     app.setOrganizationName("ClassPlayer")
     app.setStyle("Fusion")   # 맥/윈도우에서 같은 모양으로 그리기
+    apply_palette(app)
     app.setStyleSheet(QSS)
     icon_path = (bootstrap.bundled_dir() or Path(__file__).resolve().parent) / "assets" / "icon.png"
     if icon_path.exists():

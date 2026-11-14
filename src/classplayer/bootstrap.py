@@ -11,6 +11,10 @@ VIDEO_EXTENSIONS = {
     ".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v", ".ts", ".m2ts", ".mts",
     ".wmv", ".flv", ".mpg", ".mpeg", ".3gp", ".ogv", ".vob", ".mxf", ".hevc", ".h265", ".insv", ".insp", ".osv", ".lrf", ".lrv",
 }
+# 녹음 파일과 받은 소리 파일도 라이브러리에서 바로 재생할 수 있게
+AUDIO_EXTENSIONS = {".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus"}
+MEDIA_EXTENSIONS = VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
+
 
 
 def bundled_dir() -> Path | None:
