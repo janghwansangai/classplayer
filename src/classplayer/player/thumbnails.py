@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import subprocess
 import threading
+import time
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,9 @@ from PySide6.QtCore import QObject, QStandardPaths, Signal
 from PySide6.QtGui import QPixmap
 
 THUMB_W = 256
+_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
+       "Chrome/131.0.0.0 Safari/537.36")
+RETRY_SECONDS = 4.0
 
 
 class ThumbnailProvider(QObject):
@@ -34,7 +38,9 @@ class ThumbnailProvider(QObject):
         # 스토리보드
         self._sb: dict[str, Any] | None = None
         self._sheets: dict[int, QPixmap | None] = {}
+        self._failed_at: dict[int, float] = {}
         self._fetching: set[int] = set()
+        self._headers: dict[str, str] = {}
         base = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.CacheLocation) or "/tmp")
         self._root = base / "thumbs"
         self._root.mkdir(parents=True, exist_ok=True)
@@ -46,6 +52,7 @@ class ThumbnailProvider(QObject):
         self._cache.clear()
         self._sb = None
         self._sheets.clear()
+        self._failed_at.clear()
         self._fetching.clear()
 
     # ------------------------------------------------------------------ 로컬 파일
@@ -85,6 +92,10 @@ class ThumbnailProvider(QObject):
         # 타일 폭이 150~250 쯤인 것을 고른다 (보통 sb1)
         sbs.sort(key=lambda f: abs(float(f.get("width") or 0) - 200))
         sb = sbs[0]
+        hdr = {str(k): str(v) for k, v in (sb.get("http_headers") or {}).items()}
+        hdr.setdefault("User-Agent", _UA)
+        hdr.setdefault("Referer", "https://www.youtube.com/")
+        self._headers = hdr
         frags = []
         t = 0.0
         for fr in sb["fragments"]:
@@ -100,11 +111,14 @@ class ThumbnailProvider(QObject):
 
         def work() -> None:
             data = b""
-            try:
-                with urllib.request.urlopen(url, timeout=10) as r:
-                    data = r.read()
-            except Exception:  # noqa: BLE001
-                pass
+            for _attempt in range(2):
+                try:
+                    req = urllib.request.Request(url, headers=self._headers or {"User-Agent": _UA})
+                    with urllib.request.urlopen(req, timeout=10) as r:
+                        data = r.read()
+                    break
+                except Exception:  # noqa: BLE001
+                    time.sleep(0.5)
             if gen != self._gen:
                 return
             with self._lock:
@@ -112,12 +126,20 @@ class ThumbnailProvider(QObject):
             pm = QPixmap()
             if data:
                 pm.loadFromData(data)
-            self._sheets[idx] = pm if not pm.isNull() else None
+            if pm.isNull():
+                self._failed_at[idx] = time.time()     # 잠시 뒤 다시 시도
+                self._sheets.pop(idx, None)
+            else:
+                self._sheets[idx] = pm
             self.ready.emit()
 
         threading.Thread(target=work, daemon=True).start()
 
     # ------------------------------------------------------------------ 조회
+    def has_source(self) -> bool:
+        """미리보기 그림을 만들 재료가 있는지 (없으면 시간만 보여 준다)."""
+        return bool(self._sb) or self._dir is not None
+
     def thumbnail(self, t: float) -> QPixmap | None:
         if self._sb:
             return self._from_storyboard(t)
@@ -146,6 +168,8 @@ class ThumbnailProvider(QObject):
         start, d, url = frags[fi]
         sheet = self._sheets.get(fi, "missing")
         if sheet == "missing":
+            if time.time() - self._failed_at.get(fi, 0.0) < RETRY_SECONDS:
+                return None
             with self._lock:
                 if fi not in self._fetching:
                     self._fetching.add(fi)

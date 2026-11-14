@@ -23,7 +23,9 @@
 - 구글 드라이브 등 '자리만 있는' 클라우드 파일: bootstrap.is_cloud_placeholder()(맥 SF_DATALESS, 윈도우 OFFLINE/RECALL 속성)로 감지 → 열 때 "내려받고 재생/그냥 재생" 묻고, 라이브러리 썸네일은 건너뜀(안 그러면 폴더 전체를 내려받음).
 - 전체화면 컨트롤바: 맥에서 QOpenGLWidget 위에 자식 위젯을 겹치면 흐릿하게 합성되는 문제(배속 글자 안 보임)가 있어 2026-11-14부터 영상 아래 어두운 띠(레이아웃 안)로 두고 자동 숨김만 한다. 겹치기 모드는 CLASSPLAYER_FS_OVERLAY=1. paintGL 끝에 _restore_gl_state()로 mpv가 바꾼 GL 상태를 되돌린다.
 - 녹화·녹음: `record.py`. 로컬 파일은 LocalRecordJob(ffmpeg, 기본 -c copy, '정확하게'는 libx264 재인코딩, 소리만은 MP3), 링크는 make_url_record_job(yt-dlp download_ranges, 구간 녹화는 SponsorBlock 제거 끔). 파일 이름에 "[녹화 …]/[녹음 …]"이 붙고 라이브러리 '녹화·녹음' 칩이 이 표시로 거른다. 탐색바 빨간 띠는 ClickSlider.set_marks. 단축키 Ctrl+R, I/O. QTimeEdit은 Fusion+QSS에서 입력칸 폭이 1px이 되는 문제가 있어 TimeField(QLineEdit 입력 틀)를 쓴다.
-- 유튜브 로딩: StreamResolver.warm_up(앱 시작 시 yt-dlp·deno 예열), prefetch(클립보드 감지·입력칸 타이핑 시), 20분 캐시. 2026-11-14 측정: 미리 풀기 없이 링크→재생 약 3.4초(주소 풀기 2.7초), 복사 후 몇 초 뒤 누르면 0.2초.
+- 유튜브 로딩: StreamResolver.warm_up(앱 시작 시 yt-dlp·deno 예열), prefetch(클립보드 감지·입력칸 타이핑 시), 메모리 20분 + 디스크 캐시(CacheLocation/streams.json, 주소의 expire 30분 전까지·최대 5시간). 주소에 ip가 묶여 있어 네트워크가 바뀌면 404 → MpvWidget.load_failed 로 감지해 forget() 후 다시 풀기. socket_timeout 15초. 앱 안 풀기가 실패해 mpv 훅으로 열면 _retry_storyboard 가 뒤에서 다시 풀어 탐색 미리보기를 채운다. 2026-11-14: 두 번째 실행부터 링크→재생 약 1초. 2026-11-14 측정: 미리 풀기 없이 링크→재생 약 3.4초(주소 풀기 2.7초), 복사 후 몇 초 뒤 누르면 0.2초.
 - 업데이트: `updater.py`가 GitHub releases/latest를 보고 플랫폼 zip을 받아 풀고(맥 ditto), 앱 종료 뒤 셸/배치 스크립트가 교체·재실행. 번들 실행일 때만 자동 설치, 개발 실행은 릴리스 페이지를 연다. 버전은 `classplayer/__init__.py`의 __version__ 과 pyproject 를 함께 올리고 태그 vX.Y.Z 로 릴리스. 시작 8초 뒤 하루 한 번 조용히 확인. 윈도우 교체 스크립트는 미검증.
 - 오류 신고: 도움말 > 오류 신고가 Apps Script 주소에 app=class-player, v, where(화면 이름만, 파일명·링크 제외)를 붙여 브라우저로 연다. 비밀 키 없음.
 - CI 주의: 2026-11-13 v0.3.0 태그 빌드에서 macOS 잡이 러너를 못 받아 15분 뒤 취소됨(코드 문제 아님) → `gh run rerun <id> --failed`.
+- yt-dlp 의 FFmpegFD.available() 은 ffmpeg_location 을 무시하고 PATH 만 본다(결과도 캐시). 그래서 bootstrap.setup_library_paths/MainWindow 시작 시 번들·ffmpeg 폴더를 PATH 앞에 넣는다. 이걸 빠뜨리면 번들 앱에서 '구간 녹화'가 "ffmpeg is not installed" 로 실패한다(v0.4.0 버그). 자가 점검 JSON 의 ytdlp_ffmpeg 가 true 인지 확인.
+- 탐색 미리보기: 스토리보드 시트는 브라우저 UA/Referer 로 받고 실패하면 4초 뒤 다시 시도. 미리보기 재료가 없으면 시간만 보인다.

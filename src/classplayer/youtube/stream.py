@@ -5,13 +5,16 @@ mpv 내장 ytdl 훅 대신 이 경로를 기본으로 쓰는 이유: 다운로�
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import threading
 import time
-from dataclasses import dataclass, field
+import urllib.parse
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QStandardPaths, Signal
 
 SUB_LANGS = ("ko", "en")
 
@@ -66,7 +69,13 @@ def resolve_info(info: dict[str, Any], url: str) -> ResolvedStream:
         rs.user_agent = str((info.get("http_headers") or {}).get("User-Agent") or "")
     if not rs.video_url:
         raise RuntimeError("재생할 수 있는 스트림을 찾지 못했습니다")
-    rs.storyboards = [f for f in (info.get("formats") or []) if str(f.get("format_id", "")).startswith("sb")]
+    rs.storyboards = [
+        {"format_id": f.get("format_id"), "width": f.get("width"), "height": f.get("height"),
+         "rows": f.get("rows"), "columns": f.get("columns"), "fps": f.get("fps"),
+         "http_headers": {str(k): str(v) for k, v in (f.get("http_headers") or {}).items()},
+         "fragments": [{"url": str(fr.get("url", "")), "duration": float(fr.get("duration") or 0)}
+                       for fr in (f.get("fragments") or [])]}
+        for f in (info.get("formats") or []) if str(f.get("format_id", "")).startswith("sb")]
     subs = info.get("subtitles") or {}
     autos = info.get("automatic_captions") or {}
     for lang in SUB_LANGS:
@@ -82,7 +91,68 @@ def resolve_info(info: dict[str, Any], url: str) -> ResolvedStream:
     return rs
 
 
-CACHE_SECONDS = 20 * 60        # 유튜브 재생 주소는 몇 시간 유효하지만 넉넉히 짧게 둔다
+CACHE_SECONDS = 20 * 60        # 메모리 캐시 (같은 실행 안에서)
+DISK_MAX_SECONDS = 5 * 3600    # 디스크 캐시 최대 (유튜브 주소는 보통 6시간 유효)
+
+
+def _expiry(rs: ResolvedStream) -> float:
+    """재생 주소가 만료되기 30분 전 시각. 주소에 expire 가 없으면 30분 뒤."""
+    now = time.time()
+    try:
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(rs.video_url).query)
+        exp = float((q.get("expire") or [0])[0])
+    except Exception:  # noqa: BLE001
+        exp = 0.0
+    if exp <= 0:
+        return now + 30 * 60
+    return min(exp - 30 * 60, now + DISK_MAX_SECONDS)
+
+
+class _DiskCache:
+    """앱을 껐다 켜도 남는 주소 캐시: 수업 전에 한 번 열어 두면 수업 중에는 바로 재생된다."""
+
+    def __init__(self) -> None:
+        base = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.CacheLocation) or "/tmp")
+        base.mkdir(parents=True, exist_ok=True)
+        self.path = base / "streams.json"
+        self._lock = threading.Lock()
+        try:
+            self._data: dict[str, dict] = json.loads(self.path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            self._data = {}
+
+    def get(self, key: str) -> ResolvedStream | None:
+        with self._lock:
+            d = self._data.get(key)
+        if not d or float(d.get("until", 0)) < time.time():
+            return None
+        try:
+            return ResolvedStream(**d["rs"])
+        except Exception:  # noqa: BLE001
+            return None
+
+    def put(self, key: str, rs: ResolvedStream) -> None:
+        with self._lock:
+            now = time.time()
+            self._data = {k: v for k, v in self._data.items() if float(v.get("until", 0)) > now}
+            self._data[key] = {"until": _expiry(rs), "rs": asdict(rs)}
+            if len(self._data) > 200:
+                for k in sorted(self._data, key=lambda k: self._data[k]["until"])[: len(self._data) - 200]:
+                    self._data.pop(k, None)
+            self._save()
+
+    def drop(self, key: str) -> None:
+        with self._lock:
+            if self._data.pop(key, None) is not None:
+                self._save()
+
+    def _save(self) -> None:
+        try:
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self._data, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(self.path)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 class StreamResolver(QObject):
@@ -102,7 +172,9 @@ class StreamResolver(QObject):
         self._lock = threading.Lock()
         self._cache: dict[tuple[str, int], tuple[float, ResolvedStream]] = {}
         self._inflight: dict[tuple[str, int], threading.Event] = {}
+        self._disk = _DiskCache()
         self.last_seconds = 0.0
+        self.last_from_cache = False
 
     # ------------------------------------------------------------------
     def warm_up(self) -> None:
@@ -128,19 +200,36 @@ class StreamResolver(QObject):
     def cancel(self) -> None:
         self._gen += 1
 
+    @staticmethod
+    def _dkey(key: tuple[str, int]) -> str:
+        return f"{key[1]}|{key[0]}"
+
     def cached(self, url: str) -> ResolvedStream | None:
         key = (url, int(self.max_height))
         with self._lock:
             hit = self._cache.get(key)
         if hit and time.time() - hit[0] < CACHE_SECONDS:
             return hit[1]
-        return None
+        rs = self._disk.get(self._dkey(key))
+        if rs is not None:
+            with self._lock:
+                self._cache[key] = (time.time(), rs)
+        return rs
+
+    def forget(self, url: str) -> None:
+        """저장해 둔 주소가 안 열릴 때(네트워크가 바뀌어 거절 등) 버린다."""
+        key = (url, int(self.max_height))
+        with self._lock:
+            self._cache.pop(key, None)
+        self._disk.drop(self._dkey(key))
 
     def prefetch(self, url: str) -> None:
         """복사·붙여넣기 순간 미리 풀어 둔다. 결과는 캐시에만 넣고 화면에는 아무것도 하지 않는다."""
         key = (url, int(self.max_height))
+        if self.cached(url) is not None:
+            return
         with self._lock:
-            if key in self._inflight or (key in self._cache and time.time() - self._cache[key][0] < CACHE_SECONDS):
+            if key in self._inflight:
                 return
             ev = self._inflight[key] = threading.Event()
 
@@ -171,6 +260,7 @@ class StreamResolver(QObject):
                 if ev is not None:
                     ev.wait(60)             # 미리 풀기가 진행 중이면 그 결과를 기다린다
                 rs = self.cached(url)
+                self.last_from_cache = rs is not None
                 if rs is None:
                     rs = self._extract(url, h)
                     self._store(key, rs)
@@ -187,6 +277,7 @@ class StreamResolver(QObject):
 
     # ------------------------------------------------------------------
     def _store(self, key: tuple[str, int], rs: ResolvedStream) -> None:
+        self._disk.put(self._dkey(key), rs)
         with self._lock:
             self._cache[key] = (time.time(), rs)
             if len(self._cache) > 30:
@@ -200,6 +291,8 @@ class StreamResolver(QObject):
             "quiet": True, "no_warnings": True, "skip_download": True, "noplaylist": True,
             "format": f"bestvideo[height<={h}]+bestaudio/best[height<={h}]/best",
             "subtitleslangs": list(SUB_LANGS), "writesubtitles": True, "writeautomaticsub": True,
+            # 느린 네트워크에서 한없이 기다리지 않게: 15초 안에 응답이 없으면 실패로 보고 다른 방법으로 연다
+            "socket_timeout": 15, "extractor_retries": 2,
         }
         if self.js_runtime:
             opts["js_runtimes"] = {self.js_runtime: {"path": self.js_runtime_path}}

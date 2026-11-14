@@ -1,6 +1,6 @@
 [project]
 name = "classplayer"
-version = "0.4.0"
+version = "0.4.1"
 description = "수업용 영상 플레이어: 모든 코덱, 360도, 유튜브 광고 없이 재생/다운로드"
 requires-python = ">=3.12,<3.14"
 dependencies = [

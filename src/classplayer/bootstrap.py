@@ -23,6 +23,15 @@ def bundled_dir() -> Path | None:
     return Path(base) if base else None
 
 
+def add_to_path(folder: str) -> None:
+    """실행 파일 검색 경로(PATH) 맨 앞에 폴더를 넣는다 (이미 있으면 그대로)."""
+    if not folder or not os.path.isdir(folder):
+        return
+    parts = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p]
+    if folder not in parts:
+        os.environ["PATH"] = os.pathsep.join([folder] + parts)
+
+
 def setup_library_paths() -> None:
     """mpv 모듈을 import 하기 전에 libmpv를 찾을 수 있도록 검색 경로를 넣는다."""
     candidates: list[Path] = []
@@ -39,6 +48,9 @@ def setup_library_paths() -> None:
     else:
         key = "LD_LIBRARY_PATH"
 
+    if b:
+        # yt-dlp 는 구간 받기 등에서 ffmpeg 를 PATH 에서만 찾는다(ffmpeg_location 무시). 번들 폴더를 PATH 앞에 둔다.
+        add_to_path(str(b))
     existing = [p for p in os.environ.get(key, "").split(os.pathsep) if p]
     ordered = [str(c) for c in candidates if c.is_dir()] + [p for p in existing if p not in map(str, candidates)]
     os.environ[key] = os.pathsep.join(ordered)

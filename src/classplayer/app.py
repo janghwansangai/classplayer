@@ -240,15 +240,20 @@ class SeekPreview(QFrame):
         lay.addWidget(self.img)
         lay.addWidget(self.time)
 
-    def show_at(self, pm, t: float, anchor: QPoint) -> None:
+    def show_at(self, pm, t: float, anchor: QPoint, has_source: bool = True) -> None:
         self.time.setText(fmt_time(t))
         if pm is not None and not pm.isNull():
             self.img.setPixmap(pm.scaled(self.img.size(), Qt.AspectRatioMode.KeepAspectRatio,
                                          Qt.TransformationMode.SmoothTransformation))
             self.img.show()
+        elif has_source:
+            self.img.clear()
+            self.img.setText("미리보기 불러오는 중…")
+            self.img.setStyleSheet("color: #8b8e99; font-size: 12px;")
+            self.img.show()
         else:
             self.img.clear()
-            self.img.setText("…")
+            self.img.hide()      # 미리보기 재료가 없으면 시간만
         self.adjustSize()
         x = anchor.x() - self.width() // 2
         y = anchor.y() - self.height() - 10
@@ -577,6 +582,8 @@ class MainWindow(QMainWindow):
         self.ffmpeg = bootstrap.find_tool("ffmpeg")
         self.ffprobe = bootstrap.find_tool("ffprobe")
         self.js_runtime = next((r for r in ("deno", "node", "bun") if bootstrap.find_tool(r)), None)
+        if self.ffmpeg:   # yt-dlp 구간 받기는 PATH 의 ffmpeg 만 본다
+            bootstrap.add_to_path(str(Path(self.ffmpeg).parent))
 
         self.setWindowTitle(APP_NAME)
         self.resize(1280, 820)
@@ -801,6 +808,7 @@ class MainWindow(QMainWindow):
         p.wheel_scrolled.connect(lambda d: self._nudge_volume(5 * d))
         p.vr_changed.connect(self._on_vr_changed)
         p.buffering_changed.connect(self._on_buffering)
+        p.load_failed.connect(self._on_load_failed)
         self.resolver.started.connect(self._on_resolve_started)
 
         c.play_clicked.connect(p.toggle_pause)
@@ -1039,7 +1047,8 @@ class MainWindow(QMainWindow):
     def _on_stream_resolved(self, rs) -> None:
         if rs.url != self._current:
             return
-        self.statusBar().clearMessage()
+        how = "저장해 둔 주소" if self.resolver.last_from_cache else f"주소 확인 {self.resolver.last_seconds:.1f}초"
+        self.statusBar().showMessage(f"유튜브: {how}", 6000)
         self._show_loading("영상을 불러오는 중…")
         self.player.play_stream(rs.video_url, rs.audio_url, title=rs.title, user_agent=rs.user_agent,
                                 subtitles=rs.subtitles)
@@ -1058,9 +1067,45 @@ class MainWindow(QMainWindow):
             self.notify(f"유튜브 주소를 풀지 못했습니다 ({message}). 다른 방식으로 다시 시도합니다", 8000)
         self._show_loading("영상을 여는 중…")
         self.player.play(url)
+        if self._current_is_youtube:
+            self._retry_storyboard(url)
         vid = youtube_video_id(url)
         if vid and self.a_sponsor.isChecked():
             self.skipper.load(vid)
+
+    def _retry_storyboard(self, url: str) -> None:
+        """다른 방법(mpv)으로 열었을 때도 탐색 미리보기를 쓸 수 있게 뒤에서 다시 주소를 풀어 본다."""
+        self.resolver.prefetch(url)
+        tries = {"n": 0}
+
+        def poll() -> None:
+            if url != self._current:
+                return
+            rs = self.resolver.cached(url)
+            if rs is not None and rs.storyboards:
+                self.thumbs.load_storyboard(rs.storyboards)
+                return
+            tries["n"] += 1
+            if tries["n"] < 30:
+                QTimer.singleShot(2000, poll)
+
+        QTimer.singleShot(2000, poll)
+
+    def _on_load_failed(self, err: int) -> None:
+        cur = self._current
+        if not cur:
+            return
+        if self._current_is_youtube and self.resolver.last_from_cache and not getattr(self, "_refetching", False):
+            # 저장해 둔 주소가 거절됨 (인터넷 연결이 바뀌었거나 만료) → 버리고 새로 받는다
+            self._refetching = True
+            self.resolver.forget(cur)
+            self.resolver.last_from_cache = False
+            self._show_loading("저장해 둔 주소가 만료되어 새로 확인하는 중…")
+            self.resolver.resolve(cur)
+            return
+        self._refetching = False
+        self.loading.hide()
+        self.notify("영상을 열지 못했습니다. 인터넷 연결이나 파일을 확인해 주세요", 7000)
 
     def _probe_local(self, path: str) -> None:
         ffprobe = self.ffprobe
@@ -1343,6 +1388,7 @@ class MainWindow(QMainWindow):
 
     def _on_file_loaded(self, path: str) -> None:
         self.loading.hide()
+        self._refetching = False
         self._update_info()
         QTimer.singleShot(600, self._show_hud_info)
         if self._audio_only:
@@ -1360,7 +1406,7 @@ class MainWindow(QMainWindow):
             frac = slider.value() / max(1, slider.maximum())
             x = int(frac * slider.width())
         anchor = slider.mapToGlobal(QPoint(x, 0))
-        self.preview.show_at(self.thumbs.thumbnail(t), t, anchor)
+        self.preview.show_at(self.thumbs.thumbnail(t), t, anchor, self.thumbs.has_source())
 
     def _refresh_preview(self) -> None:
         if self.preview.isVisible():
@@ -1845,6 +1891,11 @@ def _run_selftest(app: QApplication, win: "MainWindow", target: str) -> None:
         info["js_runtime"] = win.js_runtime
         info["bundled"] = bool(bootstrap.bundled_dir())
         info["libmpv"] = bootstrap.loaded_libmpv_path()
+        try:
+            from yt_dlp.downloader.external import FFmpegFD
+            info["ytdlp_ffmpeg"] = bool(FFmpegFD.available())
+        except Exception as e:  # noqa: BLE001
+            info["ytdlp_ffmpeg"] = f"error: {e}"
         print("SELFTEST " + json.dumps(info, ensure_ascii=False), flush=True)
         ok = (info.get("time-pos") or 0) > 2
         win.close()
