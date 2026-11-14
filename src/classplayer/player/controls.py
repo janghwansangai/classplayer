@@ -228,7 +228,7 @@ class ControlBar(QWidget):
         self.speed.setToolTip("재생 속도 ([ / ])")
         self.speed.currentIndexChanged.connect(lambda i: self.speed_changed.emit(float(self.speed.itemData(i))))
 
-        self.btn_subs = tool("subs", "자막 전환 (S)")
+        self.btn_subs = tool("subs", "자막 전환 (S) · 지금: 꺼짐", checkable=True)
         self.btn_subs.clicked.connect(self.subs_clicked)
         self.btn_shot = tool("camera", "현재 화면을 이미지로 저장")
         self.btn_shot.clicked.connect(self.screenshot_clicked)
@@ -302,6 +302,20 @@ class ControlBar(QWidget):
             self.slider.set_marks(None, None)
         else:
             self.slider.set_marks(a / self._duration, b / self._duration)
+
+    def set_subs(self, on: bool) -> None:
+        self.btn_subs.blockSignals(True)
+        self.btn_subs.setChecked(on)
+        self.btn_subs.blockSignals(False)
+        self.btn_subs.setToolTip("자막 전환 (S) · 지금: " + ("켜짐" if on else "꺼짐"))
+
+    def set_recording(self, on: bool, text: str = "") -> None:
+        """녹화 중이면 녹화 버튼을 빨갛게 눌린 상태로 보여 준다."""
+        self.btn_rec.setCheckable(True)
+        self.btn_rec.blockSignals(True)
+        self.btn_rec.setChecked(on)
+        self.btn_rec.blockSignals(False)
+        self.btn_rec.setToolTip(text if on else "녹화·녹음: 전체 또는 구간을 파일로 저장 (Ctrl+R)")
 
     def set_audio_only(self, on: bool) -> None:
         self.btn_audio.blockSignals(True)

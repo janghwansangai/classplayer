@@ -192,14 +192,36 @@ class DownloadItem(QWidget):
         job.title_known.connect(self.title.setText)
         job.progress.connect(self._on_progress)
         job.finished.connect(self._on_finished)
-        job.failed.connect(lambda m: self.status.setText("실패: " + m))
+        job.failed.connect(self._on_failed)
+        import time as _t
+        self._t0 = _t.time()
+        self._last_text = ""
+        self.bar.setRange(0, 0)          # 진행률을 모를 때는 움직이는 막대
+        self._timer = QTimer(self)
+        self._timer.setInterval(1000)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start()
+        self.status.setText("시작하는 중…")
         self._path = ""
 
+    def _tick(self) -> None:
+        import time as _t
+        sec = int(_t.time() - self._t0)
+        kind = "녹음" if "녹음" in (self.title.full_text() or "") else ("녹화" if "녹화" in (self.title.full_text() or "") else "받기")
+        msg = self._last_text if self._last_text and "0%" not in self._last_text else f"{kind} 진행 중"
+        self.status.setText(f"{msg} · {sec // 60}:{sec % 60:02d} 경과")
+
     def _on_progress(self, frac: float, text: str) -> None:
-        self.bar.setValue(int(frac * 1000))
-        self.status.setText(text)
+        self._last_text = text
+        if frac > 0.001:
+            if self.bar.maximum() == 0:
+                self.bar.setRange(0, 1000)
+            self.bar.setValue(int(frac * 1000))
+        self._tick()
 
     def _on_finished(self, path: str) -> None:
+        self._timer.stop()
+        self.bar.setRange(0, 1000)
         self._path = path
         if path:
             self.bar.setValue(1000)
@@ -208,6 +230,13 @@ class DownloadItem(QWidget):
             self.btn_folder.show()
         else:
             self.btn.setText("닫기")
+
+    def _on_failed(self, msg: str) -> None:
+        self._timer.stop()
+        self.bar.setRange(0, 1000)
+        self.bar.setValue(0)
+        self.status.setStyleSheet("color: #f87171;")
+        self.status.setText("실패: " + msg)
 
     def _on_btn(self) -> None:
         if self.job.is_running():
@@ -607,6 +636,8 @@ class RecordDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("녹화 · 녹음")
         self.setModal(False)
+        # 탐색바를 눌러도 메인 창 뒤로 숨지 않게 '도구 창'으로 띄운다
+        self.setWindowFlag(Qt.WindowType.Tool, True)
         self.setMinimumWidth(500)
         self.duration = duration
         self._pos_fn = None
@@ -882,7 +913,11 @@ class MainWindow(QMainWindow):
         self.hud_codec.setObjectName("hud")
         self.hud_speed = QLabel("")
         self.hud_speed.setObjectName("hudamber")
-        for w in (self.hud_vr, self.hud_codec, self.hud_speed):
+        self.hud_subs = QLabel("자막 켜짐")
+        self.hud_subs.setObjectName("hud")
+        self.hud_rec = QLabel("")
+        self.hud_rec.setObjectName("hudrec")
+        for w in (self.hud_rec, self.hud_vr, self.hud_subs, self.hud_codec, self.hud_speed):
             hl.addWidget(w)
             w.hide()
         self.hud.move(16, 14)
@@ -1014,6 +1049,7 @@ class MainWindow(QMainWindow):
         p.vr_changed.connect(self._on_vr_changed)
         p.buffering_changed.connect(self._on_buffering)
         p.load_failed.connect(self._on_load_failed)
+        p.subs_changed.connect(self._on_subs_changed)
         self.resolver.started.connect(self._on_resolve_started)
 
         c.play_clicked.connect(p.toggle_pause)
@@ -1404,9 +1440,9 @@ class MainWindow(QMainWindow):
         v = self.player.vr
         self.hud_vr.setText(f"360° · 시야 {math.degrees(v.fov):.0f}°" if vr_on else "")
         self.hud_vr.setVisible(vr_on)
-        any_shown = any(not w.isHidden() for w in (self.hud_vr, self.hud_codec, self.hud_speed))
+        any_shown = any(not w.isHidden() for w in (self.hud_rec, self.hud_vr, self.hud_subs, self.hud_codec, self.hud_speed))
         self.hud.adjustSize()
-        self.hud.setVisible(any_shown and bool(self._current))
+        self.hud.setVisible(any_shown and (bool(self._current) or not self.hud_rec.isHidden()))
         self.hud.raise_()
         self.compass.setVisible(vr_on)
         if vr_on:
@@ -1463,7 +1499,36 @@ class MainWindow(QMainWindow):
             return cur, True
         return (cur, False) if Path(cur).exists() else ("", False)
 
+    def _on_subs_changed(self, on: bool) -> None:
+        self.controls.set_subs(on)
+        self.hud_subs.setVisible(on)
+        self._refresh_hud()
+
+    def _rec_running(self) -> bool:
+        return any(j.is_running() for j in getattr(self, "_rec_jobs", []))
+
+    def _update_rec_status(self) -> None:
+        import time as _t
+        jobs = [j for j in getattr(self, "_rec_jobs", []) if j.is_running()]
+        if not jobs:
+            self._rec_timer.stop()
+            self.hud_rec.hide()
+            self.controls.set_recording(False)
+            self._refresh_hud()
+            return
+        sec = int(_t.time() - self._rec_t0)
+        txt = f"● 녹화 중 {sec // 60}:{sec % 60:02d}"
+        self.hud_rec.setText(txt)
+        self.hud_rec.show()
+        self.controls.set_recording(True, f"{txt} · 끝나면 다시 녹화할 수 있습니다")
+        self._refresh_hud()
+
     def open_record_dialog(self) -> None:
+        if self._rec_running():
+            self.controls.set_recording(True)
+            self.dock_downloads.show()
+            self.notify("녹화가 진행 중입니다. 끝난 뒤 다시 녹화할 수 있습니다 (진행 상황은 오른쪽 '다운로드' 창)", 5000)
+            return
         src, is_link = self._record_source()
         if not src:
             self.notify("먼저 영상을 열어 주세요. 열려 있는 영상의 전체나 일부를 파일로 저장합니다")
@@ -1530,6 +1595,9 @@ class MainWindow(QMainWindow):
             self.notify("녹화 구간 시작을 지금 위치로 정했습니다" if start else "녹화 구간 끝을 지금 위치로 정했습니다", 2000)
 
     def _start_record(self, src: str, is_link: bool, title: str, duration: float, o: dict) -> None:
+        if self._rec_running():
+            self.notify("이미 녹화가 진행 중입니다", 4000)
+            return
         out_dir = self.settings.download_dir
         Path(out_dir).mkdir(parents=True, exist_ok=True)
         a, b, audio = o.get("start"), o.get("end"), bool(o.get("audio"))
@@ -1549,7 +1617,17 @@ class MainWindow(QMainWindow):
                                                     start=a, end=b, audio=audio, accurate=bool(o.get("accurate")),
                                                     duration=duration, ffmpeg=self.ffmpeg))
         job.finished.connect(self._on_record_finished)
+        job.failed.connect(lambda m: self.notify(f"녹화 실패: {m}", 9000) if m != "취소됨" else None)
+        import time as _t
+        self._rec_jobs = [j for j in getattr(self, "_rec_jobs", []) if j.is_running()] + [job]
+        self._rec_t0 = _t.time()
+        if not hasattr(self, "_rec_timer"):
+            self._rec_timer = QTimer(self)
+            self._rec_timer.setInterval(1000)
+            self._rec_timer.timeout.connect(self._update_rec_status)
         self.downloads.add_job(job)
+        self._rec_timer.start()
+        self._update_rec_status()
         self.dock_downloads.show()
         kind = "녹음" if audio else "녹화"
         span = "전체" if a is None else f"{fmt_time(a)} ~ {fmt_time(b or 0)}"
@@ -1558,6 +1636,7 @@ class MainWindow(QMainWindow):
             self._rec_dialog.close()
 
     def _on_record_finished(self, path: str) -> None:
+        QTimer.singleShot(200, self._update_rec_status)
         if not path:
             return
         self.library.rescan()

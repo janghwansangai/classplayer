@@ -46,7 +46,8 @@ class MpvWidget(QOpenGLWidget):
     video_size_changed = Signal(int, int)
     media_title_changed = Signal(str)
     file_loaded = Signal(str)
-    load_failed = Signal(int)          # 열기 실패 (mpv 오류 번호)
+    load_failed = Signal(int)
+    subs_changed = Signal(bool)        # 자막이 화면에 나오는지          # 열기 실패 (mpv 오류 번호)
     eof_reached = Signal()
     hwdec_changed = Signal(str)
     volume_changed = Signal(float)
@@ -139,6 +140,7 @@ class MpvWidget(QOpenGLWidget):
         m.observe_property("volume", lambda _n, v: self.volume_changed.emit(float(v or 0.0)))
         m.observe_property("mute", lambda _n, v: self.mute_changed.emit(bool(v)))
         m.observe_property("eof-reached", lambda _n, v: self.eof_reached.emit() if v else None)
+        m.observe_property("sid", lambda _n, v: self.subs_changed.emit(v not in (False, None, "no", 0)))
         m.observe_property("paused-for-cache", lambda _n, v: self.buffering_changed.emit(bool(v)))
 
         @m.event_callback("end-file")
