@@ -112,3 +112,26 @@ def test_playlist_order(tmp_path):
     assert [i.target for i in st.get(name).items] == ["b.mp4", "a.mp4", "c.mp4"]
     st2 = PlaylistStore(path=tmp_path / "pl.json")   # 다시 불러와도 남아 있다
     assert len(st2.get(name).items) == 3
+
+
+def test_playlist_manage_and_m3u(tmp_path):
+    from PySide6.QtCore import QCoreApplication
+    QCoreApplication.instance() or QCoreApplication([])
+    from classplayer.library.playlist import PlaylistStore
+    st = PlaylistStore(path=tmp_path / "pl.json")
+    a = st.create("3학년 과학")
+    st.add(a, str(tmp_path / "화산.mp4"), "화산과 지진")
+    st.add(a, "https://www.youtube.com/watch?v=aqz-KE-bpKQ", "토끼 영상")
+    b = st.duplicate(a)
+    assert b == "3학년 과학 복사본" and len(st.get(b).items) == 2
+    assert st.rename(b, "4학년 과학") == "4학년 과학"
+    out = tmp_path / "목록.m3u8"
+    assert st.export_m3u(a, str(out)) == 2
+    st2 = PlaylistStore(path=tmp_path / "other.json")
+    name, n = st2.import_m3u(str(out))
+    assert name == "3학년 과학" and n == 2
+    items = st2.get(name).items
+    assert items[0].title == "화산과 지진" and items[0].target.endswith("화산.mp4")
+    assert items[1].target.startswith("https://")
+    st.delete("4학년 과학")
+    assert "4학년 과학" not in st.names()

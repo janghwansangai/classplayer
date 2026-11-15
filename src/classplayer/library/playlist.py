@@ -119,6 +119,60 @@ class PlaylistStore(QObject):
             self.stop()
         self._touch()
 
+    def duplicate(self, name: str) -> str:
+        p = self.get(name)
+        if not p:
+            return name
+        new = self.unique_name(f"{name} 복사본")
+        self.lists.append(Playlist(new, [PlaylistItem(i.target, i.title) for i in p.items]))
+        self._touch()
+        return new
+
+    # ------------------------------------------------------------------ 내보내기·가져오기 (M3U)
+    def export_m3u(self, name: str, path: str) -> int:
+        """M3U(UTF-8) 로 저장. VLC 등 다른 플레이어와 다른 선생님 컴퓨터에서도 열린다."""
+        p = self.get(name)
+        if not p:
+            return 0
+        lines = ["#EXTM3U", f"#PLAYLIST:{p.name}"]
+        for it in p.items:
+            lines.append(f"#EXTINF:-1,{it.label()}")
+            lines.append(it.target)
+        Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return len(p.items)
+
+    def import_m3u(self, path: str) -> tuple[str, int]:
+        """M3U/M3U8 을 새 재생목록으로 가져온다. 상대 경로는 목록 파일 위치 기준."""
+        src = Path(path)
+        text = src.read_text(encoding="utf-8-sig", errors="replace")
+        name, title, items = src.stem, "", []
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            if line.startswith("#PLAYLIST:"):
+                name = line.split(":", 1)[1].strip() or name
+            elif line.startswith("#EXTINF"):
+                title = line.split(",", 1)[1].strip() if "," in line else ""
+            elif line.startswith("#"):
+                continue
+            else:
+                target = line
+                if not target.startswith(("http://", "https://")):
+                    if target.startswith("file://"):
+                        from urllib.parse import unquote, urlparse
+                        target = unquote(urlparse(target).path)
+                    tp = Path(target)
+                    if not tp.is_absolute():
+                        tp = (src.parent / tp).resolve()
+                    target = str(tp)
+                items.append(PlaylistItem(target, title))
+                title = ""
+        name = self.unique_name(name)
+        self.lists.append(Playlist(name, items))
+        self._touch()
+        return name, len(items)
+
     def add(self, name: str, target: str, title: str = "") -> bool:
         p = self.get(name)
         if not p or not target:

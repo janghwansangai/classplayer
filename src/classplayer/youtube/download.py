@@ -228,19 +228,32 @@ class DownloadJob(QObject):
                 with yt_dlp.YoutubeDL(opts) as ydl:
                     info = ydl.extract_info(self.req.url, download=True)
             except Exception as e:  # noqa: BLE001
-                # 어린이용 영상 등: 기본 방식 주소가 403 → android_vr 방식으로 한 번 더
+                # 유튜브가 기본 방식 주소를 거절(403)하면 받는 방식을 바꿔 가며 다시 받는다
                 if "403" not in str(e) or self._cancel.is_set() or "youtube" in (self.req.extra.get("extractor_args") or {}):
                     raise
-                self.log.emit("기본 방식이 막혀(403) 다른 방식으로 다시 받습니다")
-                self.progress.emit(0.0, "다른 방법으로 다시 받는 중…")
-                opts = self._build_opts()
                 from classplayer.bootstrap import pot_extractor_args
-                ea = dict(opts.get("extractor_args") or {})
-                ea["youtube"] = {"player_client": ["mweb", "web_safari"] if self.req.pot_cli else ["android_vr"]}
-                ea.update(pot_extractor_args(self.req.pot_cli, enabled=True))
-                opts["extractor_args"] = ea
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    info = ydl.extract_info(self.req.url, download=True)
+                plans = ([["mweb", "web_safari"]] if self.req.pot_cli else []) + [["tv_simply"], ["android_vr"]]
+                info, last = None, e
+                for n, clients in enumerate(plans, 1):
+                    if self._cancel.is_set():
+                        raise last
+                    self.log.emit(f"유튜브가 주소를 거절(403)해 다른 방식({', '.join(clients)})으로 다시 받습니다")
+                    self.progress.emit(0.0, f"다른 방법으로 다시 받는 중… ({n}/{len(plans)})")
+                    opts = self._build_opts()
+                    ea = dict(opts.get("extractor_args") or {})
+                    ea["youtube"] = {"player_client": clients}
+                    ea.update(pot_extractor_args(self.req.pot_cli, enabled=True))
+                    opts["extractor_args"] = ea
+                    try:
+                        with yt_dlp.YoutubeDL(opts) as ydl:
+                            info = ydl.extract_info(self.req.url, download=True)
+                        break
+                    except Exception as e2:  # noqa: BLE001
+                        last = e2
+                        if "403" not in str(e2) and "not available" not in str(e2):
+                            raise
+                if info is None:
+                    raise last
             if not self.final_path and info:
                 entry = info
                 if info.get("entries"):

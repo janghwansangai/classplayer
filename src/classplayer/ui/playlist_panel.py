@@ -5,9 +5,9 @@ from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QInputDialog,
-                               QLabel, QListWidget, QListWidgetItem, QMenu, QMessageBox, QToolButton, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QFileDialog, QGridLayout, QHBoxLayout, QInputDialog,
+                               QLabel, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton, QSplitter,
+                               QToolButton, QVBoxLayout, QWidget)
 
 from classplayer.bootstrap import MEDIA_EXTENSIONS
 from classplayer.library.playlist import PlaylistStore
@@ -54,9 +54,42 @@ class PlaylistPanel(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.store = store
 
-        self.combo = QComboBox()
-        self.combo.setToolTip("재생목록 고르기")
-        self.combo.currentIndexChanged.connect(lambda _i: self.refresh_items())
+        # ---- 위: 내 재생목록 (이름별로 만들고 관리)
+        head1 = QLabel("<b>내 재생목록</b>")
+        self.lists = QListWidget()
+        self.lists.setObjectName("pllists")
+        self.lists.setSpacing(1)
+        self.lists.currentRowChanged.connect(lambda _r: self.refresh_items())
+        self.lists.itemDoubleClicked.connect(lambda _it: self._play_all())
+        self.lists.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.lists.customContextMenuRequested.connect(self._list_menu)
+
+        def pbtn(text: str, tip: str, slot) -> QPushButton:
+            b = QPushButton(text)
+            b.setObjectName("chip")
+            b.setToolTip(tip)
+            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            b.clicked.connect(slot)
+            return b
+
+        mg = QGridLayout()
+        mg.setHorizontalSpacing(6)
+        mg.setVerticalSpacing(6)
+        for k, (text, tip, slot) in enumerate((
+                ("새 목록", "이름을 정해 새 재생목록 만들기", self._new_list),
+                ("이름 바꾸기", "고른 재생목록 이름 바꾸기", self._rename_list),
+                ("복제", "고른 재생목록을 복사해 새 목록 만들기", self._dup_list),
+                ("삭제", "고른 재생목록 지우기 (영상 파일은 그대로)", self._delete_list),
+                ("내보내기", "M3U 파일로 저장 (다른 컴퓨터·VLC 에서도 열림)", self._export_list),
+                ("가져오기", "M3U/M3U8 재생목록 파일 불러오기", self._import_list))):
+            mg.addWidget(pbtn(text, tip, slot), k // 3, k % 3)
+        top_box = QWidget()
+        tl = QVBoxLayout(top_box)
+        tl.setContentsMargins(0, 0, 0, 0)
+        tl.setSpacing(6)
+        tl.addWidget(head1)
+        tl.addWidget(self.lists, 1)
+        tl.addLayout(mg)
 
         def tbtn(name: str, tip: str, slot) -> QToolButton:
             b = QToolButton()
@@ -65,20 +98,16 @@ class PlaylistPanel(QWidget):
             b.clicked.connect(slot)
             return b
 
-        b_new = tbtn("plus", "새 재생목록", self._new_list)
-        b_more = QToolButton()
-        b_more.setText("⋯")
-        b_more.setToolTip("이름 바꾸기 · 삭제")
-        b_more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        m = QMenu(b_more)
-        m.addAction("이름 바꾸기…", self._rename_list)
-        m.addAction("이 재생목록 삭제…", self._delete_list)
-        b_more.setMenu(m)
-        top = QHBoxLayout()
-        top.setSpacing(6)
-        top.addWidget(self.combo, 1)
-        top.addWidget(b_new)
-        top.addWidget(b_more)
+        # ---- 아래: 고른 목록의 영상
+        self.title = QLabel("")
+        self.title.setWordWrap(True)
+        self.btn_play_all = QPushButton("▶  처음부터 재생")
+        self.btn_play_all.setObjectName("primary")
+        self.btn_play_all.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_play_all.clicked.connect(self._play_all)
+        head2 = QHBoxLayout()
+        head2.addWidget(self.title, 1)
+        head2.addWidget(self.btn_play_all)
 
         self.list = _DropList()
         self.list.setIconSize(QSize(18, 18))
@@ -125,39 +154,53 @@ class PlaylistPanel(QWidget):
         self.hint.setWordWrap(True)
         self.hint.setObjectName("muted")
 
+        bottom_box = QWidget()
+        bl = QVBoxLayout(bottom_box)
+        bl.setContentsMargins(0, 6, 0, 0)
+        bl.setSpacing(8)
+        bl.addLayout(head2)
+        bl.addLayout(tools)
+        bl.addWidget(self.list, 1)
+        bl.addLayout(opts)
+        bl.addWidget(self.hint)
+        split = QSplitter(Qt.Orientation.Vertical)
+        split.setChildrenCollapsible(False)
+        split.addWidget(top_box)
+        split.addWidget(bottom_box)
+        split.setSizes([210, 520])
         lay = QVBoxLayout(self)
         lay.setContentsMargins(10, 4, 10, 8)
-        lay.setSpacing(8)
-        lay.addLayout(top)
-        lay.addLayout(tools)
-        lay.addWidget(self.list, 1)
-        lay.addLayout(opts)
-        lay.addWidget(self.hint)
+        lay.addWidget(split, 1)
 
         store.changed.connect(self.refresh)
-        store.position_changed.connect(lambda _n, _i: self.refresh_items())
+        store.position_changed.connect(lambda _n, _i: self.refresh())
         self.refresh()
 
     # ------------------------------------------------------------------
     def current_name(self) -> str:
-        return self.combo.currentText()
+        it = self.lists.currentItem()
+        return str(it.data(Qt.ItemDataRole.UserRole)) if it else ""
 
     def select_list(self, name: str) -> None:
-        i = self.combo.findText(name)
-        if i >= 0:
-            self.combo.setCurrentIndex(i)
+        for r in range(self.lists.count()):
+            if self.lists.item(r).data(Qt.ItemDataRole.UserRole) == name:
+                self.lists.setCurrentRow(r)
+                return
 
     def refresh(self) -> None:
         cur = self.current_name()
-        self.combo.blockSignals(True)
-        self.combo.clear()
+        self.lists.blockSignals(True)
+        self.lists.clear()
         for n in self.store.names():
             p = self.store.get(n)
-            self.combo.addItem(n)
-            self.combo.setItemData(self.combo.count() - 1, f"{len(p.items) if p else 0}개", Qt.ItemDataRole.ToolTipRole)
-        i = self.combo.findText(cur)
-        self.combo.setCurrentIndex(i if i >= 0 else 0)
-        self.combo.blockSignals(False)
+            playing = self.store.active == n
+            w = QListWidgetItem(f"{'▶ ' if playing else ''}{n}    {len(p.items) if p else 0}개")
+            w.setData(Qt.ItemDataRole.UserRole, n)
+            w.setToolTip("두 번 누르면 처음부터 재생")
+            self.lists.addItem(w)
+        names = self.store.names()
+        self.lists.setCurrentRow(names.index(cur) if cur in names else 0)
+        self.lists.blockSignals(False)
         self.refresh_items()
 
     def refresh_items(self) -> None:
@@ -167,6 +210,8 @@ class PlaylistPanel(QWidget):
         self.list.clear()
         if not p:
             return
+        self.title.setText(f"<b>{name}</b> · 영상 {len(p.items)}개")
+        self.btn_play_all.setEnabled(bool(p.items))
         for i, it in enumerate(p.items):
             playing = self.store.active == name and self.store.index == i
             w = QListWidgetItem(f"{i + 1}.  " + it.label())
@@ -186,6 +231,54 @@ class PlaylistPanel(QWidget):
         name, ok = QInputDialog.getText(self, "새 재생목록", "목록 이름", text=self.store.unique_name("새 목록"))
         if ok:
             self.select_list(self.store.create(name))
+
+    def _play_all(self) -> None:
+        if self.current_name():
+            self.play_requested.emit(self.current_name(), 0)
+
+    def _dup_list(self) -> None:
+        name = self.current_name()
+        if name:
+            self.select_list(self.store.duplicate(name))
+
+    def _export_list(self) -> None:
+        name = self.current_name()
+        p = self.store.get(name)
+        if not p or not p.items:
+            QMessageBox.information(self, "내보내기", "영상이 들어 있는 재생목록을 골라 주세요.")
+            return
+        safe = "".join(c for c in name if c not in '\\/:*?"<>|').strip() or "재생목록"
+        path, _ = QFileDialog.getSaveFileName(self, "재생목록 내보내기", f"{safe}.m3u8", "재생목록 (*.m3u8 *.m3u)")
+        if path:
+            n = self.store.export_m3u(name, path)
+            QMessageBox.information(self, "내보내기", f"영상 {n}개를 저장했습니다.\n{path}\n\n"
+                                    "다른 컴퓨터에서는 '가져오기'로 열 수 있습니다. 파일 영상은 같은 위치에 있어야 재생됩니다.")
+
+    def _import_list(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "재생목록 가져오기", "", "재생목록 (*.m3u8 *.m3u)")
+        if not path:
+            return
+        try:
+            name, n = self.store.import_m3u(path)
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.warning(self, "가져오기", f"읽지 못했습니다: {e}")
+            return
+        self.select_list(name)
+        QMessageBox.information(self, "가져오기", f"'{name}' 재생목록으로 영상 {n}개를 가져왔습니다.")
+
+    def _list_menu(self, pos) -> None:
+        it = self.lists.itemAt(pos)
+        if it is None:
+            return
+        self.lists.setCurrentItem(it)
+        m = QMenu(self)
+        acts = [(m.addAction("처음부터 재생"), self._play_all), (m.addAction("이름 바꾸기…"), self._rename_list),
+                (m.addAction("복제"), self._dup_list), (m.addAction("내보내기…"), self._export_list),
+                (m.addAction("삭제…"), self._delete_list)]
+        a = m.exec(self.lists.viewport().mapToGlobal(pos))
+        for act, fn in acts:
+            if a is act:
+                fn()
 
     def _rename_list(self) -> None:
         old = self.current_name()

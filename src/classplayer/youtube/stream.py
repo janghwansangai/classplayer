@@ -32,6 +32,8 @@ class ResolvedStream:
     height: int = 0
     subtitles: list[tuple[str, str, str]] = field(default_factory=list)   # (lang, 이름, url)
     storyboards: list[dict[str, Any]] = field(default_factory=list)
+    client: str = ""             # 주소를 받은 방식 (기본이면 빈 값)
+    exhausted: bool = False      # 모든 방식을 시도했는데도 확인에 실패한 주소
 
 
 def _pick_sub_url(entry: dict[str, Any] | None) -> str:
@@ -94,9 +96,10 @@ def resolve_info(info: dict[str, Any], url: str) -> ResolvedStream:
 CACHE_SECONDS = 20 * 60        # 메모리 캐시 (같은 실행 안에서)
 # 기본 클라이언트(TV) 주소가 403 으로 막히는 영상(어린이용 등)은 이 순서로 다시 시도한다
 # 2026-11-14 확인: 어린이용 영상은 어느 클라이언트든 PO 토큰 없이는 403 → 한 번만 다시 시도하고 안내한다
-FALLBACK_CLIENTS: list[list[str]] = [["web_embedded"]]
+# 2026-11-15: 어린이용이 아닌 영상도 때때로 기본(TV) 주소가 403 → tv_simply·android_vr 는 360p 지만 열리는 경우가 많다
+FALLBACK_CLIENTS: list[list[str]] = [["tv_simply"], ["android_vr"], ["web_embedded"]]
 # PO 토큰 실행 파일(bgutil-pot)이 있으면 토큰을 받는 web 계열 클라이언트로 다시 시도한다
-FALLBACK_CLIENTS_POT: list[list[str]] = [["mweb"], ["web_safari"], ["web_embedded"]]
+FALLBACK_CLIENTS_POT: list[list[str]] = [["mweb"], ["web_safari"], ["tv_simply"], ["android_vr"], ["web_embedded"]]
 DISK_MAX_SECONDS = 5 * 3600    # 디스크 캐시 최대 (유튜브 주소는 보통 6시간 유효)
 
 
@@ -166,6 +169,7 @@ class StreamResolver(QObject):
     started = Signal(str)
     resolved = Signal(object)        # ResolvedStream
     failed = Signal(str, str)        # url, message
+    retrying = Signal(str, int, int)  # url, 몇 번째, 전체 — 유튜브가 주소를 거절해 다른 방식으로 받는 중
 
     def __init__(self, js_runtime: str | None, max_height: int = 2160, parent=None,
                  js_runtime_path: str | None = None, pot_cli: str | None = None) -> None:
@@ -245,7 +249,7 @@ class StreamResolver(QObject):
 
         def work() -> None:
             try:
-                self._store(key, self._extract(url, key[1]))
+                self._store(key, self._extract_checked(url, key[1]))
             except Exception:  # noqa: BLE001
                 pass
             finally:
@@ -255,7 +259,7 @@ class StreamResolver(QObject):
 
         threading.Thread(target=work, daemon=True).start()
 
-    def resolve(self, url: str, clients: list[str] | None = None) -> None:
+    def resolve(self, url: str, clients: list[str] | None = None, fresh: bool = False) -> None:
         """clients 를 주면 캐시를 건너뛰고 그 유튜브 클라이언트로 새로 푼다 (403 대응)."""
         self._gen += 1
         gen = self._gen
@@ -267,7 +271,7 @@ class StreamResolver(QObject):
         def work() -> None:
             try:
                 rs = None
-                if not clients:
+                if not clients and not fresh:
                     with self._lock:
                         ev = self._inflight.get(key)
                     if ev is not None:
@@ -275,7 +279,7 @@ class StreamResolver(QObject):
                     rs = self.cached(url)
                 self.last_from_cache = rs is not None
                 if rs is None:
-                    rs = self._extract(url, h, clients)
+                    rs = self._extract(url, h, clients) if clients else self._extract_checked(url, h)
                     self._store(key, rs)
             except Exception as e:  # noqa: BLE001
                 if gen == self._gen:
@@ -296,6 +300,46 @@ class StreamResolver(QObject):
             if len(self._cache) > 30:
                 oldest = min(self._cache, key=lambda k: self._cache[k][0])
                 self._cache.pop(oldest, None)
+
+    @staticmethod
+    def _url_ok(rs: ResolvedStream) -> bool:
+        """주소 앞부분 1KB 를 받아 보아 유튜브가 거절(403)하는지 미리 확인한다 (0.1~0.3초)."""
+        import urllib.error
+        import urllib.request
+
+        from classplayer.bootstrap import https_open
+        for u in (rs.video_url, rs.audio_url):
+            if not u or "googlevideo.com" not in u:
+                continue
+            req = urllib.request.Request(u, headers={"User-Agent": rs.user_agent or "Mozilla/5.0",
+                                                     "Range": "bytes=0-1023"})
+            try:
+                with https_open(req, timeout=8) as r:
+                    r.read(1024)
+            except urllib.error.HTTPError as e:
+                if e.code in (403, 404, 410):
+                    return False
+            except Exception:  # noqa: BLE001
+                pass      # 네트워크 사정으로 확인이 안 되면 재생에 맡긴다
+        return True
+
+    def _extract_checked(self, url: str, h: int) -> ResolvedStream:
+        """기본 방식으로 받고, 거절되는 주소면 방식을 바꿔 가며 열리는 주소를 찾는다."""
+        rs = self._extract(url, h)
+        if "youtu" not in url or self._url_ok(rs):
+            return rs
+        plan: list[list[str] | None] = [None] + list(self.fallback_clients)
+        for n, clients in enumerate(plan, 1):
+            self.retrying.emit(url, n, len(plan))
+            try:
+                cand = self._extract(url, h, clients)
+            except Exception:  # noqa: BLE001
+                continue
+            if self._url_ok(cand):
+                cand.client = ",".join(clients or [])
+                return cand
+        rs.exhausted = True
+        return rs
 
     def _extract(self, url: str, h: int, clients: list[str] | None = None) -> ResolvedStream:
         import yt_dlp

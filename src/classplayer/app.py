@@ -1016,6 +1016,9 @@ class MainWindow(QMainWindow):
                                        pot_cli=self.pot_cli)
         self.resolver.warm_up()
         self.resolver.resolved.connect(self._on_stream_resolved)
+        self.resolver.retrying.connect(
+            lambda u, n, t: u == self._current and self._show_loading(
+                f"유튜브가 주소를 거절해 다른 방법으로 받는 중… ({n}/{t})"))
         self.resolver.failed.connect(self._on_stream_failed)
 
         # --- 전체화면 컨트롤 자동 숨김
@@ -1132,6 +1135,7 @@ class MainWindow(QMainWindow):
         self.m_recent.aboutToShow.connect(self._fill_recent)
         m_file.addSeparator()
         act(m_file, "저장 폴더 열기 (녹화·녹음·미리 받기)", self.open_save_folder, "Ctrl+Shift+O")
+        act(m_file, "유튜브에서 열기 (브라우저)", self._open_in_browser)
         act(m_file, "캡처 폴더 열기", lambda: self._open_folder(Path(self.settings.capture_dir)))
         act(m_file, "라이브러리 폴더 추가…", self.library.add_folder_dialog)
         act(m_file, "종료", self.close, "Ctrl+Q")
@@ -1292,6 +1296,7 @@ class MainWindow(QMainWindow):
         if not self._from_playlist and self.playlists.active:
             self.playlists.stop()
         self._client_step = 0
+        self._retry_plan = None
         self._awaiting_resolve = False
         self._mpv_fallback = False
         self._refetching = False
@@ -1386,8 +1391,14 @@ class MainWindow(QMainWindow):
         if rs.url != self._current:
             return
         self._awaiting_resolve = False
+        if getattr(rs, "exhausted", False):
+            self._retry_plan = []          # 앱 안에서 이미 모든 방식을 시도함 → 실패하면 바로 안내
+        if getattr(rs, "client", "") and rs.height and rs.height < 720:
+            self._lowq_note = f"유튜브가 고화질 주소를 거절해 {rs.height}p 로 재생합니다"
         how = "저장해 둔 주소" if self.resolver.last_from_cache else f"주소 확인 {self.resolver.last_seconds:.1f}초"
         self.statusBar().showMessage(f"유튜브: {how}", 6000)
+        if getattr(self, "_retry_plan", None) is not None and rs.height and rs.height < 720:
+            self._lowq_note = f"유튜브가 고화질 주소를 거절해 {rs.height}p 로 재생합니다"
         self._show_loading("영상을 불러오는 중…")
         self.player.play_stream(rs.video_url, rs.audio_url, title=rs.title, user_agent=rs.user_agent,
                                 subtitles=rs.subtitles, start=start_seconds(rs.url))
@@ -1445,21 +1456,32 @@ class MainWindow(QMainWindow):
             self._awaiting_resolve = True
             self.resolver.resolve(cur)
             return
-        step = getattr(self, "_client_step", 0)
-        fallbacks = self.resolver.fallback_clients
-        if self._current_is_youtube and step < len(fallbacks) and not getattr(self, "_mpv_fallback", False):
-            # 어린이용 영상 등은 기본 방식 주소가 403 으로 막힌다 → 다른 방식으로 다시 받는다
-            self._client_step = step + 1
-            self.resolver.forget(cur)
-            self._show_loading(f"다른 방법으로 다시 여는 중… ({step + 1}/{len(fallbacks)})")
-            self._awaiting_resolve = True
-            self.resolver.resolve(cur, clients=fallbacks[step])
-            return
+        if self._current_is_youtube and not getattr(self, "_mpv_fallback", False):
+            # 유튜브가 주소를 거절(403)하는 일은 어린이용이 아니어도 때때로 생긴다. 받는 방식을 바꿔 가며 다시 연다:
+            # ① 기본 방식으로 새로 ② (PO 토큰) mweb·web_safari ③ tv_simply ④ android_vr ⑤ web_embedded
+            if getattr(self, "_retry_plan", None) is None:
+                first = [] if getattr(self, "_refetching", False) else [None]
+                self._retry_plan = first + list(self.resolver.fallback_clients)
+                self._retry_total = len(self._retry_plan)
+            if self._retry_plan:
+                clients = self._retry_plan.pop(0)
+                n = self._retry_total - len(self._retry_plan)
+                self.resolver.forget(cur)
+                self._show_loading(f"유튜브가 주소를 거절해 다른 방법으로 다시 여는 중… ({n}/{self._retry_total})")
+                self._awaiting_resolve = True
+                if clients is None:
+                    self.resolver.resolve(cur, fresh=True)
+                else:
+                    self.resolver.resolve(cur, clients=clients)
+                return
         self._refetching = False
         self.loading.hide()
         if self._current_is_youtube:
-            self.notify("유튜브가 이 영상의 앱 재생을 막았습니다 (어린이용 영상 등)", 15000,
-                        "유튜브에서 열기", lambda u=cur: QDesktopServices.openUrl(QUrl(u)))
+            self.resolver.forget(cur)
+            self._retry_plan = None
+            self.notify("유튜브가 지금 이 영상의 재생을 거절했습니다. 잠시 뒤 다시 시도해 주세요", 15000,
+                        "다시 시도", lambda u=cur: self.open_target(u))
+            self.statusBar().showMessage("계속 안 되면 '파일 › 유튜브에서 열기'로 브라우저에서 볼 수 있습니다", 15000)
         else:
             self.notify("영상을 열지 못했습니다. 인터넷 연결이나 파일을 확인해 주세요", 7000)
         if self.playlists.active:
@@ -1923,6 +1945,12 @@ class MainWindow(QMainWindow):
         self.notify(f"저장했습니다: {Path(path).name}", 8000, "폴더 열기", lambda p=path: reveal_in_folder(p))
         self._last_saved = path
 
+    def _open_in_browser(self) -> None:
+        if self._current and is_url(self._current):
+            QDesktopServices.openUrl(QUrl(self._current))
+        else:
+            self.notify("유튜브 등 링크 영상을 열었을 때 쓸 수 있습니다", 3000)
+
     def open_save_folder(self) -> None:
         d = Path(self.settings.download_dir)
         d.mkdir(parents=True, exist_ok=True)
@@ -2069,6 +2097,10 @@ class MainWindow(QMainWindow):
     def _on_file_loaded(self, path: str) -> None:
         self.loading.hide()
         self._refetching = False
+        if getattr(self, "_lowq_note", ""):
+            self.notify(self._lowq_note, 6000)
+            self._lowq_note = ""
+        self._retry_plan = None
         self._update_info()
         QTimer.singleShot(600, self._show_hud_info)
         if self._audio_only:

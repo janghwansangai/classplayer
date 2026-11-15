@@ -45,3 +45,5 @@
 - DJI 영상 옆 .SRT 는 비행 기록 → MpvWidget.has_telemetry_srt() 면 sub-auto=no.
 - 재생목록: `library/playlist.py`(PlaylistStore, AppData/playlists.json) + `ui/playlist_panel.py`(라이브러리 옆 탭 도크). 영상 끝(eof_reached) → 다음, N/P 키, 반복·섞기, 없는 파일·열기 실패는 건너뜀. 라이브러리·검색 결과 오른쪽 클릭 '재생목록에 추가'.
 - 대용량: 2026-11-14 11GB 듀얼 3840² HEVC(136Mbps) 시험 — 열기 0.3초, 30fps 유지, 이동 평균 0.8~1.2초, 메모리 1.3~1.5GB. 로컬 파일은 demuxer-max-bytes 150MiB(스트림은 800MiB). 배경 ffmpeg 은 bootstrap.run_low_priority(띄운 뒤 setpriority; preexec_fn 금지). 2GB 넘는 파일의 탐색 미리보기는 100군데만 건너뛰며 뽑는다. 두 스트림 합치기 경로는 hwdec-current 가 비어 로그("Using hardware decoding (…)")로 표시.
+- 유튜브 403(어린이용 아니어도 때때로, 2026-11-15 vDKcUneGS-8 은 기본 TV 주소가 계속 403·tv_simply/android_vr 360p 는 정상): StreamResolver._extract_checked 가 받은 주소 앞 1KB 를 받아 보고(_url_ok) 거절되면 [기본 새로 → (PO) mweb·web_safari → tv_simply → android_vr → web_embedded] 순으로 다시 받는다(retrying 신호로 로딩 문구). 미리 풀기도 같은 확인을 거친다. 그래도 mpv 가 실패하면 앱의 _retry_plan 이 같은 순서로 한 번 더, 마지막엔 "다시 시도" 버튼. 360p 로 열리면 안내. 다운로드도 403 이면 방식을 바꿔 가며 재시도.
+- 재생목록 관리: 패널 위쪽 '내 재생목록'(새 목록·이름 바꾸기·복제·삭제·내보내기·가져오기, M3U8 UTF-8 + #PLAYLIST/#EXTINF), 아래쪽 고른 목록 영상과 '처음부터 재생'.
