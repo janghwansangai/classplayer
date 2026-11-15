@@ -49,6 +49,10 @@
   .dl .card .btn { justify-content:center; }
   .dl ol { margin:0; padding-left:20px; color:var(--muted); font-size:14px; }
   .dl .alt { font-size:13px; color:var(--muted); }
+  .dl .share { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .dl .share .btn { padding:10px 12px; font-size:14px; cursor:pointer; font-family:inherit; }
+  .toast { position:fixed; left:50%; bottom:28px; transform:translateX(-50%); white-space:nowrap; max-width:calc(100% - 32px); overflow:hidden; text-overflow:ellipsis; background:var(--raised); color:var(--text); border:1px solid var(--line); padding:10px 16px; border-radius:999px; font-size:14px; opacity:0; transition:opacity .2s; pointer-events:none; }
+  .toast.show { opacity:1; }
   .two { display:grid; grid-template-columns:1fr 1fr; gap:28px; align-items:center; }
   .two img { display:block; width:100%; max-width:520px; height:auto; margin:0 auto; border-radius:14px; border:1px solid var(--line); box-shadow:0 20px 50px rgba(0,0,0,.45); }
   .two ul { color:var(--muted); padding-left:20px; }
@@ -133,6 +137,10 @@
       <h3>안드로이드</h3>
       <div class="os">휴대폰·태블릿 · 재생목록, 소리만 재생</div>
       <a class="btn primary" href="https://github.com/janghwansangai/classplayer-android/releases/latest/download/app-release.apk">안드로이드용 내려받기 (.apk)</a>
+      <div class="share">
+        <button type="button" class="btn" id="share-android" aria-label="안드로이드 설치 링크를 카카오톡·문자로 보내기">링크 보내기</button>
+        <button type="button" class="btn" id="copy-android" aria-label="안드로이드 설치 안내와 링크 복사">링크 복사</button>
+      </div>
       <ol>
         <li>폰에서 이 페이지를 열고 받은 파일을 누릅니다.</li>
         <li>"알 수 없는 앱 설치"를 허용하라는 창이 뜨면 허용합니다.</li>
@@ -151,6 +159,39 @@
   <details><summary>기본 영상 플레이어로 쓸 수 있나요?</summary><p>윈도우에서는 앱의 '설정 › 기본 영상 플레이어로 등록'을 누르세요. 맥에서는 영상 파일을 오른쪽 클릭 › 정보 가져오기 › 다음으로 열기에서 ClassPlayer를 고르고 '모두 변경'을 누르세요.</p></details>
 </div></section>
 </main>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script>
+  // 안드로이드 설치 링크 보내기·복사(앱 설정의 '설치 링크 보내기'와 같은 글)
+  (function () {
+    var url = 'https://github.com/janghwansangai/classplayer-android/releases/latest/download/app-release.apk';
+    var text = "수업용 영상 플레이어 '클래스플레이어' (안드로이드)\n" +
+      "광고 없이 유튜브 영상만, 재생목록·360도·녹화 기능이 있어요.\n\n" +
+      "1. 아래 링크를 눌러 앱 파일을 받으세요(약 120MB, 와이파이 권장).\n" +
+      "2. 받은 파일을 열고, 처음 한 번 '출처를 알 수 없는 앱 설치'를 허용한 뒤 설치하세요.\n" +
+      "3. 카카오톡에서 안 받아지면 링크를 길게 눌러 크롬으로 여세요.\n\n" + url;
+    var toast = document.getElementById('toast'), timer;
+    function show(msg) { toast.textContent = msg; toast.classList.add('show'); clearTimeout(timer); timer = setTimeout(function () { toast.classList.remove('show'); }, 2200); }
+    function copy() {
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(function () { show('설치 안내와 링크를 복사했습니다'); }, fallback);
+      } else { fallback(); }
+    }
+    function fallback() {
+      var ta = document.createElement('textarea'); ta.value = text; ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); show('설치 안내와 링크를 복사했습니다'); } catch (e) { show('복사하지 못했습니다. 링크를 길게 눌러 복사해 주세요'); }
+      document.body.removeChild(ta);
+    }
+    document.getElementById('copy-android').addEventListener('click', copy);
+    document.getElementById('share-android').addEventListener('click', function () {
+      // 폰에서는 카카오톡·문자 공유 창, 컴퓨터처럼 공유가 안 되면 복사
+      if (navigator.share) {
+        navigator.share({ title: '클래스플레이어 설치 링크', text: text }).catch(function (e) { if (e && e.name !== 'AbortError') copy(); });
+      } else { copy(); }
+    });
+  })();
+</script>
 
 <footer><div class="wrap">
   ClassPlayer · 초등 수업을 위해 만든 영상 플레이어 ·
