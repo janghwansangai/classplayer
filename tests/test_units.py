@@ -135,3 +135,35 @@ def test_playlist_manage_and_m3u(tmp_path):
     assert items[1].target.startswith("https://")
     st.delete("4학년 과학")
     assert "4학년 과학" not in st.names()
+
+
+def test_choco_shim_detection(tmp_path):
+    from classplayer.bootstrap import is_choco_shim
+    shim = tmp_path / "ffmpeg.exe"
+    shim.write_bytes(b"MZ" + b"\0" * 1000 + b"ShimGen generated shim - Chocolatey Shim" + b"\0" * 1000)
+    real = tmp_path / "ffprobe.exe"
+    real.write_bytes(b"MZ" + b"\0" * 5000)
+    assert is_choco_shim(str(shim))
+    assert not is_choco_shim(str(real))
+    assert not is_choco_shim(str(tmp_path / "없음.exe"))
+
+
+def test_sponsorblock_failure_keeps_download(tmp_path, monkeypatch):
+    """SponsorBlock API 실패(학교망 인증서 등)가 미리 받기 전체를 실패시키지 않는다."""
+    from yt_dlp.postprocessor.sponsorblock import SponsorBlockPP
+    from yt_dlp.utils import PostProcessingError
+
+    from classplayer.youtube.download import DownloadJob, DownloadRequest
+
+    def boom(self, info):
+        raise PostProcessingError("Unable to communicate with SponsorBlock API: [SSL: CERTIFICATE_VERIFY_FAILED]")
+
+    monkeypatch.setattr(SponsorBlockPP, "run", boom)
+    job = DownloadJob(DownloadRequest(url="https://www.youtube.com/watch?v=aqz-KE-bpKQ", out_dir=str(tmp_path)))
+    logs = []
+    job.log.connect(logs.append)
+    ydl = job._open_ydl(job._build_opts())
+    info = {"id": "x", "__files_to_move": {}}
+    out = ydl.run_all_pps("after_filter", info)
+    assert "__pending_error" not in out
+    assert any("SponsorBlock" in m for m in logs)

@@ -15,6 +15,24 @@ VIDEO_EXTENSIONS = {
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus"}
 MEDIA_EXTENSIONS = VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
 
+# 윈도우에서 ffmpeg/ffprobe 같은 콘솔 프로그램을 띄울 때 검은 창이 번쩍이지 않게 (CREATE_NO_WINDOW).
+# subprocess.run/Popen 의 creationflags 로 넘긴다. 다른 운영체제에선 0.
+NO_WINDOW = 0x08000000 if sys.platform.startswith("win") else 0
+
+
+def is_choco_shim(path: str) -> bool:
+    """Chocolatey 가 PATH 에 두는 '심(shim)' 실행 파일인지 (진짜 프로그램을 가리키는 작은 대리 파일).
+
+    v0.5.1 윈도우 번들에 진짜 ffmpeg 대신 이 심(392KB)이 들어가 사용자 PC 에서 ffmpeg 가 동작하지 않았다.
+    """
+    try:
+        if os.path.getsize(path) > 2_000_000:
+            return False
+        with open(path, "rb") as f:
+            return b"ShimGen" in f.read()
+    except OSError:
+        return False
+
 
 
 def bundled_dir() -> Path | None:
@@ -77,7 +95,7 @@ def find_tool(name: str) -> str | None:
     """yt-dlp, ffmpeg, ffprobe, node 같은 외부 실행 파일 경로를 찾는다."""
     exe = name + (".exe" if sys.platform == "win32" else "")
     b = bundled_dir()
-    if b and (b / exe).exists():
+    if b and (b / exe).exists() and not (sys.platform == "win32" and is_choco_shim(str(b / exe))):
         return str(b / exe)
     venv_bin = Path(sys.executable).parent / exe
     if venv_bin.exists():
@@ -173,6 +191,24 @@ def ssl_context():
                 pass
         _SSL_CTX = ctx
     return _SSL_CTX
+
+
+def trust_os_certificates() -> bool:
+    """프로그램 전체(yt-dlp 포함)의 HTTPS 확인을 운영체제 인증서 저장소에 맡긴다.
+
+    yt-dlp 는 자체 certifi 인증서만 써서, 학교망 HTTPS 검사 장비의 자체 인증서를 거부한다
+    (2026-11-16 윈도우: SponsorBlock 'self-signed certificate in certificate chain' → 미리 받기 실패).
+    truststore.inject_into_ssl() 은 pip 와 같은 방식으로 ssl.SSLContext 를 운영체제 확인으로 바꾼다.
+    yt-dlp 를 import 하기 전에 부른다.
+    """
+    if os.environ.get("CLASSPLAYER_NO_TRUSTSTORE"):
+        return False
+    try:
+        import truststore
+        truststore.inject_into_ssl()
+        return True
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def https_open(req, timeout: float = 15.0):

@@ -56,6 +56,32 @@ S      자막 전환            A     오디오 트랙 전환
 """
 
 
+class MainThreadGC(QObject):
+    """파이썬 순환 GC(쓰레기 수거)를 메인 스레드에서만 돌린다.
+
+    자동 GC 는 아무 스레드에서나 시작된다. 2026-11-16 맥 크래시: 미리 받기 작업 스레드에서 GC 가 돌던 중,
+    메인 스레드가 GIL 을 잠시 놓고 Qt 대화상자를 파괴하고 있어 반쯤 지워진 PySide 객체를 훑다 SIGSEGV.
+    그래서 자동 GC 를 끄고 0.5초마다 메인 스레드에서 같은 기준(세대별 문턱)으로 직접 돌린다.
+    """
+
+    def __init__(self, parent: QObject) -> None:
+        import gc
+        super().__init__(parent)
+        self._gc = gc
+        self._threshold = gc.get_threshold()
+        gc.disable()
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._check)
+        self._timer.start(500)
+
+    def _check(self) -> None:
+        gc = self._gc
+        c0, c1, c2 = gc.get_count()
+        t0, t1, t2 = self._threshold
+        if c0 > t0:
+            gc.collect(2 if c2 > t2 else 1 if c1 > t1 else 0)
+
+
 # ====================================================================== 다운로드 UI
 class DownloadDialog(QDialog):
     def __init__(self, url: str, settings: Settings, parent=None) -> None:
@@ -2198,9 +2224,11 @@ class MainWindow(QMainWindow):
         if not is_url(url):
             url = ""
         dlg = DownloadDialog(url, self.settings, self)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
+        ok = dlg.exec() == QDialog.DialogCode.Accepted
+        req = dlg.request(self.ffmpeg, self.js_runtime) if ok else None
+        dlg.deleteLater()   # 파이썬 함수가 끝날 때가 아니라 이벤트 루프에서 Qt 가 지우게
+        if req is None:
             return
-        req = dlg.request(self.ffmpeg, self.js_runtime)
         req.pot_cli = self.pot_cli
         if not is_url(req.url):
             QMessageBox.warning(self, APP_NAME, "유튜브 링크를 입력하세요.")
@@ -2580,6 +2608,7 @@ class MainWindow(QMainWindow):
 
 def main() -> None:
     bootstrap.setup_library_paths()
+    bootstrap.trust_os_certificates()
     fmt = QSurfaceFormat()
     fmt.setVersion(3, 3)
     fmt.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
@@ -2589,6 +2618,7 @@ def main() -> None:
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setOrganizationName("ClassPlayer")
+    MainThreadGC(app)   # 작업 스레드에서 GC 가 돌다 Qt 객체 파괴와 겹쳐 죽는 것 방지
     app.setStyle("Fusion")   # 맥/윈도우에서 같은 모양으로 그리기
     apply_palette(app)
     app.setStyleSheet(QSS)

@@ -136,7 +136,7 @@ class DownloadJob(QObject):
         postprocessors: list[dict[str, Any]] = []
         if r.remove_sponsors and not preset.audio_only:
             cats = list(r.sponsor_categories)
-            postprocessors.append({"key": "SponsorBlock", "categories": cats, "when": "after_filter"})
+            # SponsorBlock 은 _open_ydl() 이 '실패해도 괜찮은' 판으로 붙인다 (학교망 인증서 등으로 실패해도 영상은 저장)
             postprocessors.append({"key": "ModifyChapters", "remove_sponsor_segments": cats, "force_keyframes": False})
         if preset.audio_only:
             postprocessors.append({"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"})
@@ -168,6 +168,32 @@ class DownloadJob(QObject):
             opts["extractor_args"] = pot_extractor_args(r.pot_cli, enabled=False)
         opts.update(r.extra)
         return opts
+
+    def _open_ydl(self, opts: dict[str, Any]):
+        """YoutubeDL 을 만들고, 협찬 구간 자르기를 켰으면 실패해도 괜찮은 SponsorBlock 후처리를 붙인다.
+
+        yt-dlp 기본 SponsorBlock 은 API 연결이 실패하면(예: 학교망 HTTPS 검사 인증서) 오류를 남겨 두었다가
+        영상을 다 받은 뒤 작업 전체를 실패로 끝낸다. 여기서는 경고만 남기고 자르지 않은 채 저장한다.
+        """
+        import yt_dlp
+        from yt_dlp.postprocessor.sponsorblock import SponsorBlockPP
+
+        job = self
+
+        class _SafeSponsorBlockPP(SponsorBlockPP):
+            def run(self, info):
+                try:
+                    return super().run(info)
+                except Exception as e:  # noqa: BLE001
+                    job.log.emit("경고: SponsorBlock 에 연결하지 못해 협찬 구간을 자르지 않고 저장합니다 "
+                                 f"({str(e).splitlines()[0][:160]})")
+                    return [], info
+
+        ydl = yt_dlp.YoutubeDL(opts)
+        r = self.req
+        if r.remove_sponsors and not PRESET_BY_KEY.get(r.preset, PRESETS[0]).audio_only:
+            ydl.add_post_processor(_SafeSponsorBlockPP(ydl, categories=list(r.sponsor_categories)), when="after_filter")
+        return ydl
 
     def _download_subtitles(self, video_path: str) -> None:
         """자막은 영상과 따로, 실패해도 괜찮게 받는다.
@@ -225,7 +251,7 @@ class DownloadJob(QObject):
 
             opts = self._build_opts()
             try:
-                with yt_dlp.YoutubeDL(opts) as ydl:
+                with self._open_ydl(opts) as ydl:
                     info = ydl.extract_info(self.req.url, download=True)
             except Exception as e:  # noqa: BLE001
                 # 유튜브가 기본 방식 주소를 거절(403)하면 받는 방식을 바꿔 가며 다시 받는다
@@ -245,7 +271,7 @@ class DownloadJob(QObject):
                     ea.update(pot_extractor_args(self.req.pot_cli, enabled=True))
                     opts["extractor_args"] = ea
                     try:
-                        with yt_dlp.YoutubeDL(opts) as ydl:
+                        with self._open_ydl(opts) as ydl:
                             info = ydl.extract_info(self.req.url, download=True)
                         break
                     except Exception as e2:  # noqa: BLE001

@@ -21,7 +21,18 @@ jobs:
         with:
           deno-version: v2.x
       - name: ffmpeg 설치
-        run: choco install ffmpeg --no-progress -y
+        shell: pwsh
+        run: |
+          choco install ffmpeg --no-progress -y
+          # choco 가 PATH 에 두는 ffmpeg.exe 는 작은 '심'이라 번들하면 사용자 PC 에서 동작하지 않는다(v0.5.1 버그).
+          # 진짜 실행 파일을 bin\ 에 복사해 spec 이 그걸 쓰게 한다.
+          New-Item -ItemType Directory -Force bin | Out-Null
+          foreach ($n in "ffmpeg.exe", "ffprobe.exe") {
+            $real = Get-ChildItem "$env:ChocolateyInstall\lib\ffmpeg" -Recurse -Filter $n | Where-Object { $_.Length -gt 2MB } | Select-Object -First 1
+            if (-not $real) { throw "real $n not found under choco lib" }
+            Copy-Item $real.FullName bin\$n -Force
+            Write-Host "$n <- $($real.FullName) ($([math]::Round($real.Length/1MB)) MB)"
+          }
       - name: libmpv 받기 (shinchiro 빌드)
         shell: pwsh
         env:
@@ -48,6 +59,18 @@ jobs:
         run: uv run pytest -q tests/test_units.py
       - name: 빌드
         run: uv run pyinstaller --noconfirm --clean packaging/classplayer.spec
+      - name: 번들 ffmpeg 확인 (심이 아니고 실제로 실행되는지)
+        shell: pwsh
+        run: |
+          foreach ($n in "ffmpeg.exe", "ffprobe.exe") {
+            $f = Get-Item dist\ClassPlayer\_internal\$n
+            Write-Host "$n $([math]::Round($f.Length/1MB)) MB"
+            if ($f.Length -lt 2MB) { throw "$n is too small (choco shim?)" }
+          }
+          # PATH 에서 choco 를 빼고 번들 파일만으로 실행되는지
+          $env:PATH = "C:\Windows\System32"
+          & dist\ClassPlayer\_internal\ffmpeg.exe -version | Select-Object -First 1
+          if ($LASTEXITCODE -ne 0) { throw "bundled ffmpeg failed" }
       - name: 자가 점검 (실패해도 계속)
         continue-on-error: true
         shell: pwsh

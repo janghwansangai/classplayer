@@ -14,7 +14,7 @@ from PySide6.QtGui import QColor, QFont, QIcon, QLinearGradient, QPainter, QPain
 from PySide6.QtWidgets import (QButtonGroup, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QPushButton, QToolButton, QVBoxLayout, QWidget)
 
-from classplayer.bootstrap import AUDIO_EXTENSIONS, MEDIA_EXTENSIONS, is_cloud_placeholder
+from classplayer.bootstrap import AUDIO_EXTENSIONS, MEDIA_EXTENSIONS, NO_WINDOW, is_cloud_placeholder
 from classplayer.ui import icons
 
 THUMB_W, THUMB_H = 96, 56
@@ -169,7 +169,8 @@ class LibraryThumbs:
         if self.ffprobe:
             try:
                 out = subprocess.run([self.ffprobe, "-v", "quiet", "-show_entries", "format=duration", "-of", "json", path],
-                                     capture_output=True, text=True, timeout=20, check=False).stdout
+                                     capture_output=True, text=True, timeout=20, check=False,
+                                     creationflags=NO_WINDOW).stdout
                 dur = float(json.loads(out or "{}").get("format", {}).get("duration") or 0)
             except Exception:  # noqa: BLE001
                 dur = 0.0
@@ -187,7 +188,7 @@ class LibraryThumbs:
             try:
                 subprocess.run([self.ffmpeg, "-y", "-v", "error", "-ss", f"{ss:.2f}", "-i", path, "-frames:v", "1",
                                 "-vf", f"scale={THUMB_W * 2}:-2", "-q:v", "4", str(jpg)],
-                               capture_output=True, timeout=60, check=False)
+                               capture_output=True, timeout=60, check=False, creationflags=NO_WINDOW)
             except Exception:  # noqa: BLE001
                 pass
         k.with_suffix(".json").write_text(json.dumps({"duration": dur, "sph": sph}))

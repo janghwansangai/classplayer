@@ -11,6 +11,9 @@ ROOT = Path(SPECPATH).parent
 SRC = ROOT / "src"
 IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform == "win32"
+# 앱 정보(크래시 보고서 등)에 실제 버전이 찍히게 __init__.py 의 __version__ 을 읽는다 (예전엔 0.1.0 고정)
+import re
+APP_VERSION = re.search(r'__version__ = "(.+?)"', (SRC / "classplayer" / "__init__.py").read_text()).group(1)
 
 
 def find(name, extra_dirs=()):
@@ -36,12 +39,32 @@ elif IS_WIN:
             binaries.append((str(cand), "."))
             break
 
+def real_exe(p):
+    """Chocolatey 심(ShimGen, 수백 KB 대리 파일)이면 진짜 실행 파일을 찾고, 못 찾으면 빌드를 멈춘다.
+
+    v0.5.1 윈도우 번들에 ffmpeg 심이 들어가 사용자 PC 에서 '미리 받기'가 'ffmpeg is not installed' 로 실패했다.
+    """
+    if not (p and IS_WIN):
+        return p
+    if os.path.getsize(p) > 2_000_000 or b"ShimGen" not in Path(p).read_bytes():
+        return p
+    name = Path(p).name.lower()
+    choco = Path(os.environ.get("ChocolateyInstall", r"C:\ProgramData\chocolatey")) / "lib"
+    for cand in sorted(choco.rglob("*.exe")) if choco.is_dir() else []:
+        if cand.name.lower() == name and os.path.getsize(cand) > 2_000_000 and b"ShimGen" not in cand.read_bytes()[:4_000_000]:
+            print(f"[spec] {p} 는 Chocolatey 심 → 진짜 파일 {cand}")
+            return str(cand)
+    raise SystemExit(f"[spec] {p} 는 Chocolatey 심이고 진짜 실행 파일을 못 찾았습니다. bin\\ 에 진짜 {name} 을 두세요.")
+
+
 # 외부 도구: ffmpeg/ffprobe(합치기, 메타데이터), deno 또는 node(유튜브 JS 계산)
 for tool in ("ffmpeg", "ffprobe"):
-    p = find(tool)
+    p = real_exe(find(tool))
     if p:
         binaries.append((p, "."))
-js = find("deno") or find("node")
+    elif IS_WIN:
+        raise SystemExit(f"[spec] {tool}.exe 를 못 찾았습니다 (미리 받기·녹화에 꼭 필요)")
+js = real_exe(find("deno") or find("node"))
 if js:
     binaries.append((js, "."))
 # PO 토큰 실행 파일 (packaging/fetch_bgutil.sh 또는 CI 가 bin/ 에 받아 둠). 없으면 건너뜀.
@@ -99,7 +122,8 @@ if IS_MAC:
         bundle_identifier="kr.classplayer.app",
         info_plist={
             "CFBundleDisplayName": "ClassPlayer",
-            "CFBundleShortVersionString": "0.1.0",
+            "CFBundleShortVersionString": APP_VERSION,
+            "CFBundleVersion": APP_VERSION,
             "NSHighResolutionCapable": True,
             "LSMinimumSystemVersion": "12.0",
             "NSRequiresAquaSystemAppearance": False,

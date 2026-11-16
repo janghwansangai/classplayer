@@ -5,6 +5,8 @@ import json
 import subprocess
 from dataclasses import dataclass
 
+from classplayer.bootstrap import NO_WINDOW
+
 
 @dataclass
 class SphericalInfo:
@@ -24,7 +26,7 @@ def probe_spherical(ffprobe: str | None, path: str) -> SphericalInfo:
     try:
         out = subprocess.run(
             [ffprobe, "-v", "quiet", "-print_format", "json", "-show_streams", path],
-            capture_output=True, text=True, timeout=15, check=False,
+            capture_output=True, text=True, timeout=15, check=False, creationflags=NO_WINDOW,
         ).stdout
         data = json.loads(out or "{}")
     except Exception:  # noqa: BLE001
