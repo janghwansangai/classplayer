@@ -180,13 +180,13 @@ def test_library_scan_rules(tmp_path):
     (lib / "node_modules" / "x" / "clip.mp4").write_bytes(b"x")
     (lib / "sub" / "real.ts").write_bytes((b"\x47" + b"\0" * 187) * 4)
     (lib / "song.mp3").write_bytes(b"x")
-    for n in ("random.mp4", "제목 [7mDDM0eBWR0].mp4", "강의 [녹화 00:10-00:40].mp4"):
+    for n in ("random.mp4", "제목 [7mDDM0eBWR0].mp4", "강의 [녹화 00-10~00-40].mp4"):
         (saved / n).write_bytes(b"x")
     got = {Path(e.path).name: e.root for e in scan_folders([str(lib)], saved_folders=[str(saved)])}
-    assert set(got) == {"real.ts", "song.mp3", "제목 [7mDDM0eBWR0].mp4", "강의 [녹화 00:10-00:40].mp4"}
+    assert set(got) == {"real.ts", "song.mp3", "제목 [7mDDM0eBWR0].mp4", "강의 [녹화 00-10~00-40].mp4"}
     assert got["real.ts"] == str(lib)
     assert is_downloaded_name("제목 [7mDDM0eBWR0].mp4")
-    assert not is_downloaded_name("강의 [녹화 00:10-00:40] [7mDDM0eBWR0].mp4")
+    assert not is_downloaded_name("강의 [녹화 00-10~00-40] [7mDDM0eBWR0].mp4")
 
 
 def test_find_proxy_file(tmp_path):
