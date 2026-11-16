@@ -317,6 +317,14 @@ class ControlBar(QWidget):
         self.btn_rec.blockSignals(False)
         self.btn_rec.setToolTip(text if on else "녹화·녹음: 전체 또는 구간을 파일로 저장 (Ctrl+R)")
 
+    def set_video_tools_enabled(self, on: bool) -> None:
+        """음악·소리만 재생일 때 화면 캡처·360도 버튼을 끈다."""
+        for b, tip in ((self.btn_shot, "현재 화면을 이미지로 저장"), (self.btn_vr, "360도 모드 (3)")):
+            b.setEnabled(on)
+            b.setToolTip(tip if on else tip.split(" (")[0] + " — 음악·소리만 재생 중에는 쓸 수 없습니다")
+        if not on:
+            self.btn_vr_reset.setVisible(False)
+
     def set_audio_only(self, on: bool) -> None:
         self.btn_audio.blockSignals(True)
         self.btn_audio.setChecked(on)

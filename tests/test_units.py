@@ -167,3 +167,40 @@ def test_sponsorblock_failure_keeps_download(tmp_path, monkeypatch):
     out = ydl.run_all_pps("after_filter", info)
     assert "__pending_error" not in out
     assert any("SponsorBlock" in m for m in logs)
+
+
+def test_library_scan_rules(tmp_path):
+    """타입스크립트 .ts·node_modules 는 빼고, 저장 폴더는 앱이 저장한 파일만."""
+    from classplayer.library.library import is_downloaded_name, scan_folders
+    lib, saved = tmp_path / "lib", tmp_path / "Downloads"
+    (lib / "node_modules" / "x").mkdir(parents=True)
+    (lib / "sub").mkdir()
+    saved.mkdir()
+    (lib / "index.d.ts").write_text("export declare const a: number;\n" * 30)
+    (lib / "node_modules" / "x" / "clip.mp4").write_bytes(b"x")
+    (lib / "sub" / "real.ts").write_bytes((b"\x47" + b"\0" * 187) * 4)
+    (lib / "song.mp3").write_bytes(b"x")
+    for n in ("random.mp4", "제목 [7mDDM0eBWR0].mp4", "강의 [녹화 00:10-00:40].mp4"):
+        (saved / n).write_bytes(b"x")
+    got = {Path(e.path).name: e.root for e in scan_folders([str(lib)], saved_folders=[str(saved)])}
+    assert set(got) == {"real.ts", "song.mp3", "제목 [7mDDM0eBWR0].mp4", "강의 [녹화 00:10-00:40].mp4"}
+    assert got["real.ts"] == str(lib)
+    assert is_downloaded_name("제목 [7mDDM0eBWR0].mp4")
+    assert not is_downloaded_name("강의 [녹화 00:10-00:40] [7mDDM0eBWR0].mp4")
+
+
+def test_find_proxy_file(tmp_path):
+    from classplayer.app import find_proxy_file
+    for n in ("VID_20260410_010215_00_054.insv", "LRV_20260410_010215_01_054.lrv",
+              "DJI_20260410094654_0003_D.OSV", "DJI_20260410094654_0003_D.LRF", "VID_20260410_001636_00_052.insv"):
+        (tmp_path / n).write_bytes(b"")
+    assert Path(find_proxy_file(str(tmp_path / "VID_20260410_010215_00_054.insv"))).name == "LRV_20260410_010215_01_054.lrv"
+    assert Path(find_proxy_file(str(tmp_path / "DJI_20260410094654_0003_D.OSV"))).name == "DJI_20260410094654_0003_D.LRF"
+    assert find_proxy_file(str(tmp_path / "VID_20260410_001636_00_052.insv")) is None
+
+
+def test_dual_filter():
+    from classplayer.player.mpv_widget import MpvWidget
+    assert MpvWidget.dual_filter(False) == "[vid2][vid1]hstack[vo]"
+    assert MpvWidget.dual_filter(True) == "[vid1][vid2]hstack[vo]"
+    assert MpvWidget.dual_filter(False, 1920).startswith("[vid2]scale=1920:1920")

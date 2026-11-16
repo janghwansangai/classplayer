@@ -122,6 +122,7 @@ class MpvWidget(QOpenGLWidget):
         self._flip_y = 0
         self._last_mag_key = None
 
+        self.dual_lens_px = int(os.environ.get("CLASSPLAYER_DUAL_LENS_PX", "0") or 0)
         self._pending_subs: list[tuple[str, str, str]] = []
         self._press_pos: QPointF | None = None
         self._drag_last: QPointF | None = None
@@ -251,6 +252,28 @@ class MpvWidget(QOpenGLWidget):
 
     DUAL_STREAM_FILTER = "[vid2][vid1]hstack[vo]"
 
+    @staticmethod
+    def dual_filter(swap: bool, lens_px: int = 0) -> str:
+        """두 렌즈 합치기 lavfi-complex. lens_px 가 있으면 렌즈마다 그 크기(정사각형)로 줄인 뒤 붙인다.
+
+        렌즈 좌표는 화면 비율(0~1)이라 줄여도 이음새 맞춤값은 그대로 맞는다.
+        """
+        a, b = ("vid1", "vid2") if swap else ("vid2", "vid1")
+        if not lens_px:
+            return f"[{a}][{b}]hstack[vo]"
+        s = f"scale={lens_px}:{lens_px}:flags=fast_bilinear"
+        return f"[{a}]{s}[l];[{b}]{s}[r];[l][r]hstack[vo]"
+
+    def set_dual_lens_px(self, px: int) -> None:
+        """두 렌즈 합칠 때 렌즈 한쪽의 해상도 (0 = 원본). 재생 중이면 바로 다시 적용."""
+        self.dual_lens_px = max(0, int(px))
+        on, swap = getattr(self, "_dual_args", (False, False))
+        if on and self.dual_stream:
+            try:
+                self.mpv["lavfi-complex"] = self.dual_filter(swap, self.dual_lens_px)
+            except Exception as e:  # noqa: BLE001
+                self.log_message.emit("warn", "vr", f"합치기 해상도 바꾸기 실패: {e}")
+
     def set_dual_stream(self, on: bool, swap: bool = False, order: str | None = None) -> None:
         """렌즈별 영상 스트림이 2개인 파일(Insta360 X4 insv 등)을 가로로 붙여 듀얼 피쉬아이 한 장으로 만든다.
 
@@ -258,7 +281,8 @@ class MpvWidget(QOpenGLWidget):
         """
         if order:
             swap = order == "12"
-        want = ("[vid1][vid2]hstack[vo]" if swap else self.DUAL_STREAM_FILTER) if on else ""
+        self._dual_args = (on, swap)
+        want = self.dual_filter(swap, self.dual_lens_px) if on else ""
         try:
             if (self.mpv["lavfi-complex"] or "") == want:
                 return

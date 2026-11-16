@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import threading
 from dataclasses import dataclass
@@ -28,31 +29,85 @@ class Entry:
     folder: str
     size: int
     mtime: float
+    root: str = ""        # 이 파일을 찾은 라이브러리 폴더 (목록에서 폴더별로 묶을 때)
 
 
-def scan_folders(folders: list[str], max_files: int = 20000) -> list[Entry]:
+# 영상이 들어 있을 리 없는 폴더 (프로그램 코드·시스템 폴더). 통째로 건너뛴다.
+SKIP_DIRS = {"node_modules", "__pycache__", "site-packages", ".git", ".venv", "venv", "AppData",
+             "$RECYCLE.BIN", "System Volume Information", "bower_components"}
+# 미리 받기로 저장한 파일 이름 끝: "제목 [유튜브ID].mp4"
+_YTDLP_NAME = re.compile(r"\[[A-Za-z0-9_-]{11}\]\.[A-Za-z0-9]+$")
+# 확장자가 영상과 겹치는 다른 파일 (예: .ts = 타입스크립트 코드) 은 내용을 보고 거른다
+_SNIFF_EXT = {".ts", ".mts", ".m2ts"}
+
+
+def is_app_saved(name: str) -> bool:
+    """ClassPlayer 가 저장한 파일인지 (미리 받기 또는 녹화·녹음)."""
+    return any(t in name for t in REC_TAGS) or bool(_YTDLP_NAME.search(name))
+
+
+def is_downloaded_name(name: str) -> bool:
+    """미리 받기(yt-dlp)로 저장한 파일 이름인지 (녹화·녹음 제외)."""
+    return bool(_YTDLP_NAME.search(name)) and not any(t in name for t in REC_TAGS)
+
+
+def looks_like_mpegts(path: str) -> bool:
+    """.ts/.mts 파일이 진짜 MPEG-TS 영상인지 (타입스크립트 코드 파일은 아님).
+
+    MPEG-TS 는 188바이트마다 0x47, 블루레이(M2TS)는 192바이트마다 4바이트 뒤에 0x47 이 나온다.
+    """
+    try:
+        with open(path, "rb") as f:
+            b = f.read(192 * 3 + 8)
+    except OSError:
+        return False
+    ts = len(b) > 376 and b[0] == 0x47 and b[188] == 0x47 and b[376] == 0x47
+    m2ts = len(b) > 388 and b[4] == 0x47 and b[196] == 0x47 and b[388] == 0x47
+    return ts or m2ts
+
+
+def _is_media_name(fn: str) -> bool:
+    return not fn.startswith(".") and Path(fn).suffix.lower() in MEDIA_EXTENSIONS
+
+
+def scan_folders(folders: list[str], max_files: int = 20000, saved_folders: list[str] | None = None) -> list[Entry]:
+    """라이브러리 폴더(하위 폴더 포함)와 저장 폴더(맨 위만, 앱이 저장한 파일만)에서 영상·소리 파일을 찾는다.
+
+    저장 폴더가 '다운로드'처럼 아무 파일이나 있는 곳이어도 미리 받기·녹화·녹음한 것만 목록에 나온다.
+    """
     seen: set[str] = set()
     out: list[Entry] = []
+
+    def add(full: str, fn: str, dirpath: str, root: str) -> bool:
+        if full in seen:
+            return True
+        if Path(fn).suffix.lower() in _SNIFF_EXT and not looks_like_mpegts(full):
+            return True
+        seen.add(full)
+        try:
+            st = os.stat(full)
+        except OSError:
+            return True
+        out.append(Entry(full, fn, os.path.basename(dirpath), st.st_size, st.st_mtime, root))
+        return len(out) < max_files
+
     for root in folders:
         rp = Path(root)
         if not rp.is_dir():
             continue
         for dirpath, dirnames, filenames in os.walk(rp):
-            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+            dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in SKIP_DIRS]
             for fn in filenames:
-                if Path(fn).suffix.lower() not in MEDIA_EXTENSIONS or fn.startswith("."):
-                    continue
-                full = os.path.join(dirpath, fn)
-                if full in seen:
-                    continue
-                seen.add(full)
-                try:
-                    st = os.stat(full)
-                except OSError:
-                    continue
-                out.append(Entry(full, fn, os.path.basename(dirpath), st.st_size, st.st_mtime))
-                if len(out) >= max_files:
+                if _is_media_name(fn) and not add(os.path.join(dirpath, fn), fn, dirpath, root):
                     return out
+    for root in saved_folders or []:
+        try:
+            names = os.listdir(root)
+        except OSError:
+            continue
+        for fn in names:
+            if _is_media_name(fn) and is_app_saved(fn) and not add(os.path.join(root, fn), fn, root, root):
+                return out
     out.sort(key=lambda e: e.mtime, reverse=True)
     return out
 
@@ -200,7 +255,12 @@ class LibraryPanel(QWidget):
     folders_changed = Signal(list)
     open_saved_requested = Signal()
 
-    FILTERS = (("all", "전체"), ("360", "360°"), ("saved", "저장함"), ("rec", "녹화·녹음"))
+    FILTERS = (("all", "전체"), ("360", "360°"), ("saved", "미리 받기"), ("rec", "녹화·녹음"))
+    FILTER_TIPS = {"all": "라이브러리 폴더와 저장 폴더의 영상·소리 전부",
+                   "360": "360도 영상만",
+                   "saved": "유튜브에서 '미리 받기'로 저장한 영상",
+                   "rec": "녹화·녹음 기능으로 저장한 파일 (이름에 [녹화 …]/[녹음 …])"}
+    HEADER_ROLE = Qt.ItemDataRole.UserRole + 1
 
     def __init__(self, folders: list[str], extra_folders: list[str] | None = None, parent=None,
                  ffmpeg: str | None = None, ffprobe: str | None = None) -> None:
@@ -213,6 +273,8 @@ class LibraryPanel(QWidget):
         self._items: dict[str, QListWidgetItem] = {}
         self._sph: dict[str, bool] = {}
         self._filter = "all"
+        self._folder_filter = ""          # 고른 라이브러리 폴더 ("" = 모든 폴더)
+        self._collapsed: set[str] = set()  # 접어 둔 폴더 묶음
         self._thumbs = LibraryThumbs(ffmpeg, ffprobe)
         self._thumb_gen = 0
         self._notifier = _ScanNotifier()
@@ -235,6 +297,7 @@ class LibraryPanel(QWidget):
             b.setObjectName("chip")
             b.setCheckable(True)
             b.setChecked(key == "all")
+            b.setToolTip(self.FILTER_TIPS.get(key, ""))
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             b.clicked.connect(lambda _c, k=key: self.set_filter(k))
             self._chip_group.addButton(b)
@@ -245,12 +308,14 @@ class LibraryPanel(QWidget):
         self.list = QListWidget()
         self.list.setIconSize(QSize(THUMB_W, THUMB_H))
         self.list.setSpacing(1)
-        self.list.setUniformItemSizes(True)
+        self.list.setUniformItemSizes(False)     # 폴더 제목 줄은 높이가 다르다
+        self.list.itemClicked.connect(self._on_clicked)
         self.list.itemActivated.connect(self._on_activated)
         self.list.itemDoubleClicked.connect(self._on_activated)
 
         self.folder_combo = QComboBox()
-        self.folder_combo.setToolTip("라이브러리 폴더")
+        self.folder_combo.setToolTip("보여 줄 폴더 고르기")
+        self.folder_combo.currentIndexChanged.connect(self._on_folder_combo)
 
         def tbtn(name: str, tip: str, slot) -> QToolButton:
             b = QToolButton()
@@ -260,7 +325,7 @@ class LibraryPanel(QWidget):
             return b
 
         self.btn_add = tbtn("plus", "폴더 추가", self.add_folder_dialog)
-        self.btn_remove = tbtn("minus", "선택한 폴더 제거", self._remove_current_folder)
+        self.btn_remove = tbtn("minus", "라이브러리에서 폴더 빼기 (파일은 지우지 않음)", self._remove_folder_menu)
         self.btn_refresh = tbtn("refresh", "다시 훑기", self.rescan)
         self.btn_open_saved = tbtn("folder", "저장 폴더 열기 (녹화·녹음·미리 받기)", lambda: self.open_saved_requested.emit())
         self.lbl_count = QLabel("")
@@ -300,11 +365,28 @@ class LibraryPanel(QWidget):
         self._apply_filter()
 
     def _refresh_combo(self) -> None:
+        counts: dict[str, int] = {}
+        for e in self._entries:
+            counts[e.root] = counts.get(e.root, 0) + 1
+        self.folder_combo.blockSignals(True)
         self.folder_combo.clear()
-        for f in self._folders:
-            self.folder_combo.addItem(Path(f).name or f, f)
         if not self._folders:
             self.folder_combo.addItem("폴더를 추가하세요 (+)", "")
+        else:
+            self.folder_combo.addItem(f"모든 폴더 ({len(self._folders)}개)", "")
+            for f in self._folders:
+                n = counts.get(f)
+                self.folder_combo.addItem(f"{Path(f).name or f}" + (f" · {n}개" if n is not None else ""), f)
+        idx = self.folder_combo.findData(self._folder_filter)
+        self.folder_combo.setCurrentIndex(max(0, idx))
+        if idx < 0:
+            self._folder_filter = ""
+        self.folder_combo.blockSignals(False)
+        self.btn_remove.setEnabled(bool(self._folders))
+
+    def _on_folder_combo(self, _i: int) -> None:
+        self._folder_filter = str(self.folder_combo.currentData() or "")
+        self._apply_filter()
 
     def add_folder_dialog(self) -> None:
         d = QFileDialog.getExistingDirectory(self, "라이브러리에 추가할 폴더")
@@ -318,20 +400,66 @@ class LibraryPanel(QWidget):
             self.folders_changed.emit(self.folders)
             self.rescan()
 
-    def _remove_current_folder(self) -> None:
-        f = self.folder_combo.currentData()
-        if f in self._folders:
-            self._folders.remove(f)
-            self._refresh_combo()
-            self.folders_changed.emit(self.folders)
-            self.rescan()
+    def _remove_folder_menu(self) -> None:
+        """− 버튼: 고른 폴더가 있으면 그 폴더를, 아니면 메뉴에서 골라 뺀다."""
+        if self._folder_filter in self._folders:
+            self.remove_folder(self._folder_filter)
+            return
+        if len(self._folders) == 1:
+            self.remove_folder(self._folders[0])
+            return
+        from PySide6.QtGui import QCursor
+        from PySide6.QtWidgets import QMenu
+        m = QMenu(self)
+        acts = {m.addAction(f"‘{Path(f).name or f}’ 빼기"): f for f in self._folders}
+        a = m.exec(QCursor.pos())
+        if a is not None:
+            self.remove_folder(acts[a])
+
+    def remove_folder(self, folder: str, confirm: bool = True) -> None:
+        """라이브러리에서 폴더를 뺀다 (파일은 그대로)."""
+        if folder not in self._folders:
+            return
+        if confirm:
+            from PySide6.QtWidgets import QMessageBox
+            n = sum(1 for e in self._entries if e.root == folder)
+            r = QMessageBox.question(self, "폴더 빼기",
+                                     f"‘{Path(folder).name or folder}’ 폴더를 라이브러리 목록에서 뺄까요?\n"
+                                     f"(목록에서 {n}개가 사라집니다. 컴퓨터의 파일은 지우지 않습니다)")
+            if r != QMessageBox.StandardButton.Yes:
+                return
+        self._folders.remove(folder)
+        self._collapsed.discard(folder)
+        if self._folder_filter == folder:
+            self._folder_filter = ""
+        self._refresh_combo()
+        self.folders_changed.emit(self.folders)
+        self.rescan()
+
+    def toggle_collapsed(self, root: str) -> None:
+        if root in self._collapsed:
+            self._collapsed.discard(root)
+        else:
+            self._collapsed.add(root)
+        self._apply_filter()
+
+    def header_root(self, item: QListWidgetItem | None) -> str | None:
+        """폴더 제목 줄이면 그 폴더 경로."""
+        if item is None:
+            return None
+        v = item.data(self.HEADER_ROLE)
+        return str(v) if v else None
+
+    def is_library_folder(self, root: str) -> bool:
+        return root in self._folders
 
     def rescan(self) -> None:
-        folders = list(dict.fromkeys(self._folders + self._extra))
+        folders = list(dict.fromkeys(self._folders))
+        saved = [d for d in dict.fromkeys(self._extra) if d not in folders]
         self.lbl_count.setText("훑는 중...")
 
         def work() -> None:
-            self._notifier.done.emit(scan_folders(folders))
+            self._notifier.done.emit(scan_folders(folders, saved_folders=saved))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -341,12 +469,15 @@ class LibraryPanel(QWidget):
             c = self._thumbs.get(e.path)
             if c:
                 self._sph[e.path] = c[2]
+        self._refresh_combo()
         self._apply_filter()
 
     def _is_saved(self, e: Entry) -> bool:
-        return any(os.path.normcase(e.path).startswith(os.path.normcase(os.path.join(d, ""))) for d in self._extra)
+        return is_downloaded_name(e.name)
 
     def _passes(self, e: Entry) -> bool:
+        if self._folder_filter and e.root != self._folder_filter:
+            return False
         f = self._filter
         if f == "360":
             return self._sph.get(e.path, False)
@@ -362,27 +493,61 @@ class LibraryPanel(QWidget):
         self._items.clear()
         shown = 0
         pending: list[str] = []
-        for e in self._entries:
-            hay = (e.name + " " + e.folder).lower()
-            if not all(t in hay for t in tokens) or not self._passes(e):
-                continue
-            item = QListWidgetItem()
-            item.setToolTip(e.path)
-            item.setData(Qt.ItemDataRole.UserRole, e.path)
-            item.setSizeHint(QSize(0, THUMB_H + 14))
-            cached = self._thumbs.get(e.path)
-            if cached:
-                self._apply_thumb(item, e, *cached)
-            else:
-                self._apply_thumb(item, e, "", 0.0, False)
-                pending.append(e.path)
-            self.list.addItem(item)
-            self._items[e.path] = item
-            shown += 1
+        matched = [e for e in self._entries
+                   if all(t in (e.name + " " + e.folder).lower() for t in tokens) and self._passes(e)]
+        # 폴더별로 묶는다: 라이브러리 폴더 순서대로, 저장 폴더(미리 받기·녹화)는 마지막
+        order = {f: i for i, f in enumerate(self._folders)}
+        groups: dict[str, list[Entry]] = {}
+        for e in matched:
+            groups.setdefault(e.root, []).append(e)
+        roots = sorted(groups, key=lambda r: order.get(r, len(order)))
+        use_headers = len(roots) > 1 or (roots and not self._folder_filter and len(self._folders) > 1)
+        for root in roots:
+            if use_headers:
+                self._add_header(root, len(groups[root]))
+                if root in self._collapsed:
+                    shown += len(groups[root])
+                    continue
+            for e in groups[root]:
+                pending_e = self._add_entry_item(e)
+                if pending_e:
+                    pending.append(e.path)
+                shown += 1
         total = len(self._entries)
         self.lbl_count.setText(f"{shown}개 표시 / 전체 {total}개" if shown != total else f"{total}개")
         if pending:
             self._start_thumbs(pending[:300])
+
+    def _add_header(self, root: str, n: int) -> None:
+        saved = root not in self._folders
+        name = "저장 폴더 (미리 받기·녹화·녹음)" if saved else (Path(root).name or root)
+        arrow = "▸" if root in self._collapsed else "▾"
+        item = QListWidgetItem(f"{arrow}  {name}   ·  {n}개")
+        item.setData(self.HEADER_ROLE, root)
+        item.setToolTip(root + ("" if saved else "\n클릭: 접기/펼치기 · 오른쪽 클릭: 라이브러리에서 빼기"))
+        item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+        f = QFont()
+        f.setBold(True)
+        item.setFont(f)
+        item.setForeground(QColor("#fbbf24"))
+        item.setBackground(QColor("#1f2026"))
+        item.setSizeHint(QSize(0, 30))
+        self.list.addItem(item)
+
+    def _add_entry_item(self, e: Entry) -> bool:
+        """파일 한 줄을 넣는다. 썸네일을 새로 만들어야 하면 True."""
+        item = QListWidgetItem()
+        item.setToolTip(e.path)
+        item.setData(Qt.ItemDataRole.UserRole, e.path)
+        item.setSizeHint(QSize(0, THUMB_H + 14))
+        cached = self._thumbs.get(e.path)
+        if cached:
+            self._apply_thumb(item, e, *cached)
+        else:
+            self._apply_thumb(item, e, "", 0.0, False)
+        self.list.addItem(item)
+        self._items[e.path] = item
+        return not cached
 
     def _apply_thumb(self, item: QListWidgetItem, e: Entry, jpg: str, dur: float, sph: bool) -> None:
         audio = Path(e.name).suffix.lower() in AUDIO_EXTENSIONS
@@ -413,6 +578,11 @@ class LibraryPanel(QWidget):
         e = next((x for x in self._entries if x.path == path), None)
         if e:
             self._apply_thumb(item, e, jpg, dur, sph)
+
+    def _on_clicked(self, item: QListWidgetItem) -> None:
+        root = self.header_root(item)
+        if root is not None:
+            self.toggle_collapsed(root)
 
     def _on_activated(self, item: QListWidgetItem) -> None:
         path = item.data(Qt.ItemDataRole.UserRole)

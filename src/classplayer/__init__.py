@@ -1,2 +1,2 @@
 """ClassPlayer: 수업용 영상 플레이어."""
-__version__ = "0.5.2"
+__version__ = "0.5.3"

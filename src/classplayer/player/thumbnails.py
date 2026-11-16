@@ -31,6 +31,7 @@ class ThumbnailProvider(QObject):
         super().__init__(parent)
         self.ffmpeg = ffmpeg
         self._gen = 0
+        self._playing = False     # 큰 파일은 재생 중에는 미리보기 뽑기를 쉰다 (하드디스크에서 읽기 다툼 방지)
         self._lock = threading.Lock()
         # 로컬
         self._dir: Path | None = None
@@ -46,6 +47,9 @@ class ThumbnailProvider(QObject):
         base = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.CacheLocation) or "/tmp")
         self._root = base / "thumbs"
         self._root.mkdir(parents=True, exist_ok=True)
+
+    def set_playing(self, playing: bool) -> None:
+        self._playing = playing
 
     def clear(self) -> None:
         self._gen += 1
@@ -87,6 +91,10 @@ class ThumbnailProvider(QObject):
                     # 필요한 지점만 건너뛰며 한 장씩 뽑는다. 재생이 자리 잡은 뒤에 시작.
                     time.sleep(6)
                     for i in range(int(duration // interval) + 1):
+                        # 재생 중에는 기다린다: 하드디스크에서 영상 읽기와 여기저기 건너뛰며 읽기가 겹치면
+                        # 디스크 헤드가 왔다 갔다 해서 영상이 끊긴다. 일시 정지하면 이어서 뽑는다.
+                        while self._playing and gen == self._gen:
+                            time.sleep(0.5)
                         if gen != self._gen:
                             return
                         t = i * interval
