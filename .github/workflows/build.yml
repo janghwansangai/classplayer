@@ -73,6 +73,33 @@ jobs:
           $out = & dist\ClassPlayer\_internal\ffmpeg.exe -version
           if ($LASTEXITCODE -ne 0) { throw "bundled ffmpeg failed" }
           Write-Host ($out | Select-Object -First 1)
+      - name: 업데이트 바꿔 끼우기 시험 (실제 exe, 옛 앱 실행 중·한글/띄어쓰기 경로)
+        shell: pwsh
+        run: |
+          $root = "$env:RUNNER_TEMP\updtest"
+          Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
+          $instParent = "$root\설치 폴더"; $newParent = "$root\new"
+          New-Item -ItemType Directory -Force $instParent, $newParent | Out-Null
+          Copy-Item dist\ClassPlayer $instParent -Recurse
+          Copy-Item dist\ClassPlayer $newParent -Recurse
+          $inst = "$instParent\ClassPlayer"; $new = "$newParent\ClassPlayer"
+          "old" | Set-Content "$inst\MARK.txt"
+          "new" | Set-Content "$new\MARK.txt"
+          $env:CLASSPLAYER_TEST_SETTINGS = "1"
+          $old = Start-Process "$inst\ClassPlayer.exe" -PassThru      # 옛 앱이 떠 있어 파일이 잠긴 상태
+          Start-Sleep 6
+          $env:CLASSPLAYER_UPDATE_WAIT = "5"
+          $env:CLASSPLAYER_UPDATE_LOG = "$root\update.log"
+          $h = Start-Process "$new\ClassPlayer.exe" -ArgumentList "--apply-update", $old.Id, "`"$inst`"" -PassThru
+          if (-not $h.WaitForExit(180000)) { throw "apply-update did not finish" }
+          Get-Content "$root\update.log" -Encoding utf8
+          if ((Get-Content "$inst\MARK.txt") -ne "new") { throw "files were not replaced" }
+          if (-not (Select-String -Path "$root\update.log" -Pattern "새 앱 실행" -Encoding utf8)) { throw "app was not relaunched" }
+          Start-Sleep 6
+          $re = Get-Process ClassPlayer -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$inst*" }
+          if (-not $re) { throw "relaunched app is not running" }
+          $re | ForEach-Object { "relaunched: PID $($_.Id) $($_.Path)"; Stop-Process $_ -Force }
+          Get-Process ClassPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
       - name: 자가 점검 (실패해도 계속)
         continue-on-error: true
         shell: pwsh

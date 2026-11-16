@@ -2261,6 +2261,11 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "업데이트", f"설치를 시작하지 못했습니다: {e}")
             return
         self.notify("새 버전으로 바꾸는 중입니다. 잠시 후 다시 열립니다", 3000)
+        self.settings.q.sync()
+        # 종료가 어디선가 걸려도 업데이트가 막히지 않게: 10초 뒤에는 무조건 프로세스를 끝낸다
+        guard = threading.Timer(10.0, lambda: os._exit(0))
+        guard.daemon = True
+        guard.start()
         QTimer.singleShot(400, QApplication.instance().quit)
 
     def _on_update_failed(self, msg: str) -> None:
@@ -3172,6 +3177,10 @@ def main() -> None:
         app.setWindowIcon(QIcon(str(icon_path)))
     win = MainWindow()
     win.show()
+    if sys.platform.startswith("win") and bootstrap.bundled_dir():
+        # 지난 업데이트 때 잠겨 있어 비켜 둔 옛 파일(*.cpold) 지우기
+        from classplayer.update_apply import cleanup_old_files
+        threading.Thread(target=cleanup_old_files, args=(Path(sys.executable).resolve().parent,), daemon=True).start()
     args = [a for a in sys.argv[1:] if not a.startswith("-psn_")]   # macOS 가 붙이는 프로세스 인자 제외
     if args:
         win.open_target(args[0])

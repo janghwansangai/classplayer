@@ -250,3 +250,37 @@ def test_autodownload_helpers():
     assert "전체 디스크" in explain_error(Exception("[Errno 1] Operation not permitted: Cookies.binarycookies"), "safari")
     assert "찾지 못했습니다" in explain_error(Exception("could not find chrome cookies database"), "chrome")
     assert "로그인" in explain_error(Exception("ERROR: The playlist does not exist."), "")
+
+
+def test_update_apply(tmp_path):
+    """윈도우 업데이트 바꿔 끼우기: 옛 앱이 안 끝나면 강제 종료 → 덮어쓰기 → 비켜 둔 파일 정리."""
+    import subprocess
+    import sys as _sys
+    from classplayer import update_apply as ua
+    inst, new = tmp_path / "inst", tmp_path / "new"
+    (inst / "_internal").mkdir(parents=True)
+    (new / "_internal" / "sub").mkdir(parents=True)
+    (inst / "ClassPlayer.exe").write_text("old")
+    (inst / "_internal" / "keep.txt").write_text("old-only")
+    (inst / "_internal" / "x.dll.123.cpold").write_text("aside")
+    (new / "ClassPlayer.exe").write_text("new")
+    (new / "_internal" / "sub" / "mod.pyd").write_text("new")
+    ua._log_file = tmp_path / "update.log"
+    old = subprocess.Popen([_sys.executable, "-c", "import time; time.sleep(60)"])     # 끝나지 않는 '옛 앱'
+    try:
+        assert ua.pid_alive(old.pid)
+        assert ua.apply(old.pid, inst, new, wait_s=1.0, launch=False)
+        old.wait(timeout=5)
+        assert not ua.pid_alive(old.pid)
+    finally:
+        if old.poll() is None:
+            old.kill()
+    assert (inst / "ClassPlayer.exe").read_text() == "new"
+    assert (inst / "_internal" / "sub" / "mod.pyd").read_text() == "new"
+    assert (inst / "_internal" / "keep.txt").exists()
+    log = (tmp_path / "update.log").read_text(encoding="utf-8")
+    assert "강제로 끝냄" in log and "파일 2개 바꿈" in log
+    assert ua.cleanup_old_files(inst) == 1
+    assert not ua.apply(0, inst, inst, wait_s=0, launch=False)          # 같은 폴더면 하지 않음
+    env = ua.clean_env()
+    assert env["PYINSTALLER_RESET_ENVIRONMENT"] == "1" and not any(k.startswith("_PYI_") for k in env)

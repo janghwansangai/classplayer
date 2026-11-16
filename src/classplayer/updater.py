@@ -3,7 +3,8 @@
 깃허브 릴리스(janghwansangai/classplayer)의 최신 버전을 확인하고, 이 컴퓨터에 맞는 zip 을 받아 압축을 푼 뒤
 앱이 종료되면 작은 도우미 스크립트가 새 버전으로 바꿔 끼우고 다시 실행한다.
 - 맥: ClassPlayer.app 통째로 교체 (ditto 로 풀어 권한·링크 유지, 격리 속성 제거)
-- 윈도우: ClassPlayer 폴더 위에 새 파일을 덮어쓴 뒤 ClassPlayer.exe 실행
+- 윈도우: 받은 새 ClassPlayer.exe 를 '--apply-update' 로 실행 → 옛 앱 종료를 기다려(안 끝나면 강제 종료)
+  설치 폴더에 덮어쓰고 다시 실행 (update_apply.py). 예전 .bat 방식은 실사용에서 실패해 바꿨다(2026-11-17).
 개발 환경(uv run)에서는 설치 대신 릴리스 페이지를 연다.
 """
 from __future__ import annotations
@@ -194,10 +195,11 @@ class Updater(QObject):
             subprocess.Popen(["/bin/bash", str(script), pid, new, str(loc)], start_new_session=True,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         else:
-            script = self.work_dir / "install.bat"
-            script.write_text(_WIN_SCRIPT, encoding="ascii")
-            flags = 0x00000008 | 0x00000200 | 0x08000000   # DETACHED, NEW_PROCESS_GROUP, NO_WINDOW
-            subprocess.Popen(["cmd", "/c", str(script), pid, new, str(loc)], creationflags=flags, close_fds=True)
+            from classplayer.update_apply import launch_detached
+            exe = Path(new) / "ClassPlayer.exe"
+            if not exe.exists():
+                raise RuntimeError("받은 파일에 ClassPlayer.exe 가 없습니다")
+            launch_detached([str(exe), "--apply-update", pid, str(loc)], cwd=new)
 
 
 _MAC_SCRIPT = r"""#!/bin/bash
@@ -212,16 +214,4 @@ else
   [ -d "$APP.old" ] && [ ! -d "$APP" ] && mv "$APP.old" "$APP"
 fi
 open "$APP"
-"""
-
-_WIN_SCRIPT = r"""@echo off
-rem %1=PID  %2=new folder  %3=installed folder
-:wait
-tasklist /FI "PID eq %~1" 2>NUL | find "%~1" >NUL
-if not errorlevel 1 (
-  timeout /t 1 /nobreak >NUL
-  goto wait
-)
-robocopy "%~2" "%~3" /E /R:5 /W:1 /NFL /NDL /NJH /NJS /NP >NUL
-start "" "%~3\ClassPlayer.exe"
 """
