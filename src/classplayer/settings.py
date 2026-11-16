@@ -59,6 +59,16 @@ class Settings:
     def download_remove_sponsors(self, v: bool) -> None:
         self.q.setValue("download/remove_sponsors", bool(v))
 
+    # --- 자동 받기 ---
+    @property
+    def auto_pause_streaming(self) -> bool:
+        """유튜브(링크) 재생 중에는 자동 받기를 쉰다 (수업 화면이 끊기지 않게)."""
+        return self.q.value("auto/pause_streaming", True, type=bool)
+
+    @auto_pause_streaming.setter
+    def auto_pause_streaming(self, v: bool) -> None:
+        self.q.setValue("auto/pause_streaming", bool(v))
+
     # --- 스트리밍 ---
     @property
     def stream_max_height(self) -> int:

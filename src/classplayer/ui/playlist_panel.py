@@ -47,6 +47,7 @@ class _DropList(QListWidget):
 class PlaylistPanel(QWidget):
     play_requested = Signal(str, int)            # 목록 이름, 위치
     add_current_requested = Signal(str)          # 목록 이름
+    download_links_requested = Signal(str)       # 목록 이름: 안의 유튜브 링크를 자동 받기에 담기
 
     def __init__(self, store: PlaylistStore, parent=None) -> None:
         super().__init__(parent)
@@ -275,6 +276,11 @@ class PlaylistPanel(QWidget):
         acts = [(m.addAction("처음부터 재생"), self._play_all), (m.addAction("이름 바꾸기…"), self._rename_list),
                 (m.addAction("복제"), self._dup_list), (m.addAction("내보내기…"), self._export_list),
                 (m.addAction("삭제…"), self._delete_list)]
+        m.addSeparator()
+        n_links = len(self.store.links(self.current_name()))
+        a_dl = m.addAction(f"유튜브 링크 {n_links}개 모두 받기 (자동 받기)")
+        a_dl.setEnabled(n_links > 0)
+        acts.append((a_dl, lambda: self.download_links_requested.emit(self.current_name())))
         a = m.exec(self.lists.viewport().mapToGlobal(pos))
         for act, fn in acts:
             if a is act:

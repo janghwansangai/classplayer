@@ -5,6 +5,7 @@ import datetime as _dt
 import os
 import sys
 import threading
+import time
 from pathlib import Path
 
 import math
@@ -22,6 +23,9 @@ from classplayer import __version__, bootstrap
 from classplayer.bootstrap import APP_NAME, AUDIO_EXTENSIONS, MEDIA_EXTENSIONS
 from classplayer.record import LocalRecordJob, LocalRecordRequest, make_url_record_job
 from classplayer.ui import icons
+from classplayer.library.autodownload import (LIKED_URL, WATCH_LATER_URL, AutoDownloader, AutoDownloadStore, Source,
+                                              is_playlist_url, playlist_url)
+from classplayer.ui.autodownload_panel import AutoDownloadPanel, LikedDialog
 from classplayer.ui.music_view import MusicView
 from classplayer.ui.stitch_dialog import StitchDialog
 from classplayer.ui.playlist_panel import PlaylistPanel
@@ -540,6 +544,7 @@ class SearchPanel(QFrame):
     play_requested = Signal(str, str)        # url, 제목
     download_requested = Signal(str)
     playlist_add_requested = Signal(str, str)   # url, 제목
+    queue_requested = Signal(list)               # [(url, 제목)] → 자동 받기 목록에 담기
     closed = Signal()
 
     def __init__(self, parent=None) -> None:
@@ -636,10 +641,17 @@ class SearchPanel(QFrame):
         a_play = m.addAction("재생")
         a_dl = m.addAction("미리 받기 (파일로 저장)…")
         a_pl = m.addAction("재생목록에 추가")
+        a_q = m.addAction("받을 목록에 담기 (자동 받기)")
+        a_qall = m.addAction(f"검색 결과 {self.list.count()}개 모두 받을 목록에 담기")
         a_copy = m.addAction("링크 복사")
         a = m.exec(self.list.viewport().mapToGlobal(pos))
         if a is a_play:
             self._activate(it)
+        elif a is a_q:
+            self.queue_requested.emit([(r.url, r.title)])
+        elif a is a_qall:
+            rs = [self.list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.list.count())]
+            self.queue_requested.emit([(x.url, x.title) for x in rs if x is not None and not x.is_live])
         elif a is a_pl:
             self.playlist_add_requested.emit(r.url, r.title)
         elif a is a_dl:
@@ -1093,6 +1105,17 @@ class MainWindow(QMainWindow):
         self.library.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.library.list.customContextMenuRequested.connect(self._library_menu)
 
+        # --- 자동 받기 (라이브러리·재생목록 옆 탭)
+        self.autodl_store = AutoDownloadStore(parent=self)
+        self.autodl_panel = AutoDownloadPanel(self.autodl_store)
+        self.autodl_panel.pause_streaming.setChecked(self.settings.auto_pause_streaming)
+        self.dock_autodl = QDockWidget("자동 받기", self)
+        self.dock_autodl.setObjectName("dock_autodl")
+        self.dock_autodl.setWidget(self.autodl_panel)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.dock_autodl)
+        self.tabifyDockWidget(self.dock_playlist, self.dock_autodl)
+        self.dock_library.raise_()
+
         self.downloads = DownloadPanel()
         self.downloads.play_requested.connect(self.open_target)
         self.downloads.job_finished.connect(lambda _p: self.library.rescan())
@@ -1101,6 +1124,25 @@ class MainWindow(QMainWindow):
         self.dock_downloads.setWidget(self.downloads)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock_downloads)
         self.dock_downloads.hide()
+
+        # 자동 받기 실행기: 받을 목록을 앞에서부터 하나씩 (기존 미리 받기 작업으로, 다운로드 창에 진행 표시)
+        self.autodl = AutoDownloader(self.autodl_store, self._make_auto_job, self._auto_wait_reason,
+                                     js_runtime=self.js_runtime, parent=self)
+        self.autodl.status_changed.connect(self.autodl_panel.set_status)
+        self.autodl.item_finished.connect(self._on_auto_item_finished)
+        self.autodl.source_fetched.connect(self._on_source_fetched)
+        self._first_sources: set[int] = set()
+        ap = self.autodl_panel
+        ap.enabled_toggled.connect(self._set_autodl_enabled)
+        ap.pause_streaming_toggled.connect(lambda on: setattr(self.settings, "auto_pause_streaming", on))
+        ap.add_playlist_link_requested.connect(self._add_playlist_source)
+        ap.add_liked_requested.connect(self._add_liked_source)
+        ap.add_link_requested.connect(self._queue_link_dialog)
+        ap.check_now_requested.connect(lambda: self.autodl.check_sources(force=True))
+        ap.play_requested.connect(self.open_target)
+        ap.reveal_requested.connect(reveal_in_folder)
+        self.playlist_panel.download_links_requested.connect(self._queue_playlist_links)
+        QTimer.singleShot(4000, self.autodl.start)
 
         # --- 상태 표시줄
         self.lbl_title = QLabel("")
@@ -1161,6 +1203,7 @@ class MainWindow(QMainWindow):
         self.search_panel.play_requested.connect(self._play_search_result)
         self.search_panel.download_requested.connect(self._download_search_result)
         self.search_panel.playlist_add_requested.connect(lambda u, t: self._add_to_playlist_menu(u, t))
+        self.search_panel.queue_requested.connect(lambda entries: self._queue_add(entries, "검색"))
         self.search_panel.closed.connect(lambda: self.url_edit.setFocus())
         self.url_edit.installEventFilter(self)
 
@@ -1267,6 +1310,8 @@ class MainWindow(QMainWindow):
         act(m_play, "다음 영상 (재생목록, N)", self.playlist_next)
         act(m_play, "이전 영상 (재생목록, P)", self.playlist_prev)
         act(m_play, "재생목록 보기", self.show_playlist, "Ctrl+Shift+L")
+        act(m_file, "받을 목록에 담기 (입력칸의 유튜브 링크, 자동 받기)", self._queue_from_url_bar, "Ctrl+Shift+D")
+        act(m_file, "자동 받기 보기", lambda: self._show_dock(self.dock_autodl))
         act(m_play, "지금 영상을 재생목록에 추가", lambda: self._add_to_playlist_menu(self._current, self.lbl_title.text() if is_url(self._current) else "") if self._current else self.notify("먼저 영상을 열어 주세요"))
         m_play.addSeparator()
         act(m_play, "녹화 · 녹음…", self.open_record_dialog, "Ctrl+R")
@@ -2769,6 +2814,159 @@ class MainWindow(QMainWindow):
             self.move(self.x() + dx, self.y() + dy)
         return True
 
+    # ------------------------------------------------------------------ 자동 받기
+    def _make_auto_job(self, item) -> DownloadJob:
+        s = self.settings
+        req = DownloadRequest(url=item.url, out_dir=s.download_dir, preset=s.download_preset,
+                              subtitles=s.download_subtitles, remove_sponsors=s.download_remove_sponsors,
+                              ffmpeg_path=self.ffmpeg, js_runtime=self.js_runtime, pot_cli=self.pot_cli)
+        job = DownloadJob(req)
+        job.display = "[자동] " + item.label()
+        self.downloads.add_job(job)       # 다운로드 창에 진행 표시 + 시작
+        return job
+
+    def _auto_wait_reason(self) -> str:
+        """지금은 자동 받기를 쉬어야 하면 그 이유."""
+        if self.settings.auto_pause_streaming and self._current and is_url(self._current) \
+                and not bool(self.player.property("pause", True)):
+            return "유튜브 재생 중 (멈추거나 끝나면 이어서 받습니다)"
+        if any(j.is_running() for j in getattr(self, "_rec_jobs", [])):
+            return "녹화·녹음 중"
+        return ""
+
+    def _set_autodl_enabled(self, on: bool) -> None:
+        self.autodl_store.set_enabled(on)
+        if not on:
+            self.autodl.stop_current()
+        else:
+            self.autodl.run_now()
+
+    def _queue_add(self, entries: list, source: str, playlist: str = "", replace_link: bool = False) -> int:
+        n = self.autodl_store.add_many(entries, source=source, playlist=playlist, replace_link=replace_link)
+        skipped = len(entries) - n
+        if n:
+            msg = f"받을 목록에 {n}개를 담았습니다" + (f" (이미 있는 {skipped}개 제외)" if skipped else "") + \
+                  (" · 앱이 켜져 있는 동안 차례로 받습니다" if self.autodl_store.enabled else " · 자동 받기가 꺼져 있습니다")
+            self.notify(msg, 5000, "목록 보기", lambda: self._show_dock(self.dock_autodl))
+            self.autodl.run_now()
+        else:
+            self.notify("이미 받을 목록에 있는 영상입니다", 3000)
+        return n
+
+    def _queue_from_url_bar(self) -> None:
+        url = self.url_edit.text().strip() or (self._current if is_url(self._current) else "")
+        if not is_url(url):
+            self.notify("입력칸에 유튜브 링크를 넣고 다시 누르세요", 3500)
+            return
+        if is_playlist_url(url) and not youtube_video_id(url):
+            self._add_playlist_source(url)
+            return
+        title = self.lbl_title.text() if url == self._current else ""
+        self._queue_add([(url, title)], "링크")
+
+    def _queue_link_dialog(self) -> None:
+        from PySide6.QtWidgets import QInputDialog
+        clip = QApplication.clipboard().text().strip()
+        url, ok = QInputDialog.getText(self, "받을 목록에 담기", "유튜브 영상 링크 (재생목록 링크면 '가져올 곳'에 추가합니다)",
+                                       text=clip if is_url(clip) else "")
+        url = url.strip()
+        if not ok or not url:
+            return
+        if is_playlist_url(url) and not youtube_video_id(url):
+            self._add_playlist_source(url)
+        elif is_url(url):
+            self._queue_add([(url, "")], "링크")
+
+    def _queue_playlist_links(self, name: str) -> None:
+        links = self.playlists.links(name)
+        if links:
+            self._queue_add(links, name, playlist=name, replace_link=True)
+
+    def _add_playlist_source(self, url: str = "") -> None:
+        from PySide6.QtWidgets import QInputDialog
+        if not url:
+            clip = QApplication.clipboard().text().strip()
+            url, ok = QInputDialog.getText(self, "유튜브 재생목록 가져오기",
+                                           "재생목록 링크 (공개 또는 일부 공개) — 새 영상이 생길 때마다 받습니다",
+                                           text=clip if is_playlist_url(clip) else "")
+            if not ok:
+                return
+        url = url.strip()
+        if not is_playlist_url(url):
+            QMessageBox.warning(self, APP_NAME, "유튜브 재생목록 링크(…list=…)를 넣어 주세요.")
+            return
+        src = self.autodl_store.add_source(Source(kind="playlist", url=playlist_url(url), name="재생목록 확인 중…"))
+        self._fetch_first(src)
+
+    def _add_liked_source(self) -> None:
+        dlg = LikedDialog(self)
+        ok = dlg.exec() == QDialog.DialogCode.Accepted
+        kind, browser, pl = dlg.values()
+        dlg.deleteLater()
+        if not ok:
+            return
+        url = LIKED_URL if kind == "liked" else WATCH_LATER_URL
+        name = "좋아요 표시한 동영상" if kind == "liked" else "나중에 볼 동영상"
+        src = self.autodl_store.add_source(Source(kind=kind, url=url, name=name, browser=browser, playlist=pl))
+        self._fetch_first(src)
+
+    def _fetch_first(self, src: Source) -> None:
+        self._first_sources.add(id(src))
+        self._show_dock(self.dock_autodl)
+        self.autodl_panel.set_status(f"목록을 가져오는 중… — {src.describe()}")
+        self.autodl.fetch(src, first=True)
+
+    def _on_source_fetched(self, src: Source, title: str, entries, err: str) -> None:
+        if id(src) not in self._first_sources:
+            return
+        self._first_sources.discard(id(src))
+        if err:
+            self.autodl_store.remove_source(src)
+            QMessageBox.warning(self, APP_NAME, f"목록을 가져오지 못했습니다.\n\n{err}")
+            return
+        if src.kind == "playlist":
+            src.name = title or "유튜브 재생목록"
+            if not src.playlist:
+                src.playlist = self.playlists.unique_name(src.name) if not self.playlists.get(src.name) else src.name
+        n = len(entries)
+        box = QMessageBox(self)
+        box.setWindowTitle("자동 받기")
+        box.setText(f"‘{src.name}’에 영상이 {n}개 있습니다. 어떻게 할까요?")
+        box.setInformativeText("앞으로 새로 추가되는 영상은 자동으로 확인해서 받습니다 (앱이 켜져 있을 때).")
+        b_all = box.addButton(f"지금 있는 {n}개 모두 받기", QMessageBox.ButtonRole.AcceptRole)
+        b_some = box.addButton("최근 10개만 받기" if src.kind != "playlist" else "앞의 10개만 받기",
+                               QMessageBox.ButtonRole.AcceptRole) if n > 10 else None
+        box.addButton("새로 추가되는 것만", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(b_all if n <= 30 else (b_some or b_all))
+        box.exec()
+        clicked = box.clickedButton()
+        src.seen = [vid for vid, _u, _t in entries]
+        src.last_check = time.time()
+        chosen = entries if clicked is b_all else (entries[:10] if clicked is b_some else [])
+        self.autodl_store.touch()
+        if src.playlist and not self.playlists.get(src.playlist):
+            src.playlist = self.playlists.create(src.playlist)
+            self.autodl_store.touch()
+        if chosen:
+            self._queue_add([(u, t) for _v, u, t in chosen], src.name, playlist=src.playlist)
+        else:
+            self.notify(f"‘{src.name}’을(를) 가져올 곳에 추가했습니다. 새 영상이 생기면 받습니다", 5000)
+
+    def _on_auto_item_finished(self, item) -> None:
+        if item.status != "done" or not item.path:
+            if item.status == "failed":
+                self.statusBar().showMessage(f"자동 받기 실패: {item.label()} — {item.error}", 8000)
+            return
+        self.library.rescan()
+        if item.playlist:
+            if not self.playlists.get(item.playlist):
+                self.playlists.create(item.playlist)
+            replaced = self.playlists.replace_link(item.playlist, item.url, item.path) if item.replace_link else 0
+            if not replaced and not self.playlists.has_target(item.playlist, item.path):
+                self.playlists.add(item.playlist, item.path, item.title)
+        c = self.autodl_store.counts()
+        self.statusBar().showMessage(f"자동 받기 완료: {item.label()} · 남은 영상 {c['wait']}개", 6000)
+
     def _show_dock(self, dock: QDockWidget) -> None:
         """도크를 보이게 한다. 전체화면 중이면 지금은 숨긴 채로 두고 전체화면을 끝낼 때 보이게 한다."""
         if self._fullscreen:
@@ -2945,6 +3143,7 @@ class MainWindow(QMainWindow):
             self._fit_base_win_w = self.width()
 
     def closeEvent(self, e: QCloseEvent) -> None:
+        self.autodl.shutdown()
         self.downloads.cancel_all()
         self.settings.library_folders = self.library.folders
         self.player.shutdown()

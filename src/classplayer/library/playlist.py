@@ -182,6 +182,28 @@ class PlaylistStore(QObject):
         self._touch()
         return True
 
+    def replace_link(self, name: str, url: str, path: str) -> int:
+        """재생목록 안의 같은 유튜브 영상 링크를 받은 파일로 바꾼다 (자동 받기 후 인터넷 없이 재생)."""
+        from classplayer.youtube.common import youtube_video_id
+        p = self.get(name)
+        vid = youtube_video_id(url)
+        n = 0
+        for it in p.items if p else []:
+            if it.is_link and (it.target == url or (vid and youtube_video_id(it.target) == vid)):
+                it.target = path
+                n += 1
+        if n:
+            self._touch()
+        return n
+
+    def links(self, name: str) -> list[tuple[str, str]]:
+        p = self.get(name)
+        return [(i.target, i.title) for i in p.items if i.is_link] if p else []
+
+    def has_target(self, name: str, target: str) -> bool:
+        p = self.get(name)
+        return bool(p and any(i.target == target for i in p.items))
+
     def remove(self, name: str, idx: int) -> None:
         p = self.get(name)
         if p and 0 <= idx < len(p.items):

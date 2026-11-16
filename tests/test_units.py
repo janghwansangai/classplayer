@@ -204,3 +204,49 @@ def test_dual_filter():
     assert MpvWidget.dual_filter(False) == "[vid2][vid1]hstack[vo]"
     assert MpvWidget.dual_filter(True) == "[vid1][vid2]hstack[vo]"
     assert MpvWidget.dual_filter(False, 1920).startswith("[vid2]scale=1920:1920")
+
+
+def test_autodownload_store(tmp_path):
+    """받을 목록: 같은 영상 두 번 안 담기, 순서, 다시 받기, 저장·불러오기(받던 것은 대기로)."""
+    from classplayer.library.autodownload import AutoDownloadStore
+    p = tmp_path / "q.json"
+    st = AutoDownloadStore(p)
+    a, b, c = ("https://www.youtube.com/watch?v=aqz-KE-bpKQ", "https://youtu.be/eRsGyueVLvQ",
+               "https://www.youtube.com/watch?v=7mDDM0eBWR0")
+    assert st.add_many([(a, "A"), (b, "B"), (c, "C")], source="검색") == 3
+    assert not st.add("https://youtu.be/aqz-KE-bpKQ?t=5")          # 같은 영상 ID
+    assert not st.add("not a link")
+    st.move_to_front(st.items[2])
+    assert [i.title for i in st.items] == ["C", "A", "B"]
+    st.items[0].status = "running"
+    st.items[1].status, st.items[1].error = "failed", "x"
+    st.save()
+    st2 = AutoDownloadStore(p)
+    assert [i.status for i in st2.items] == ["wait", "failed", "wait"]
+    assert st2.add(a, "A")                                         # 실패했던 것을 다시 담으면 대기로
+    assert st2.items[1].status == "wait" and st2.items[1].error == ""
+    st2.items[0].status = "done"
+    assert st2.clear_done() == 1 and len(st2.items) == 2
+
+
+def test_playlist_replace_link(tmp_path):
+    from classplayer.library.playlist import PlaylistStore
+    st = PlaylistStore(tmp_path / "pl.json")
+    name = st.create("과학")
+    st.add(name, "https://www.youtube.com/watch?v=aqz-KE-bpKQ", "토끼")
+    st.add(name, "/x/other.mp4")
+    assert st.links(name) == [("https://www.youtube.com/watch?v=aqz-KE-bpKQ", "토끼")]
+    assert st.replace_link(name, "https://youtu.be/aqz-KE-bpKQ", "/x/토끼 [aqz-KE-bpKQ].mp4") == 1
+    assert st.links(name) == [] and st.has_target(name, "/x/토끼 [aqz-KE-bpKQ].mp4")
+
+
+def test_autodownload_helpers():
+    from classplayer.library.autodownload import explain_error, is_playlist_url, playlist_url
+    assert is_playlist_url("https://www.youtube.com/playlist?list=PL123")
+    assert is_playlist_url("https://www.youtube.com/watch?v=aqz-KE-bpKQ&list=PL123")
+    assert not is_playlist_url("https://www.youtube.com/watch?v=aqz-KE-bpKQ")
+    assert playlist_url("https://www.youtube.com/watch?v=x&list=PL123") == "https://www.youtube.com/playlist?list=PL123"
+    assert "파이어폭스" in explain_error(Exception("Failed to decrypt with DPAPI"), "chrome")
+    assert "전체 디스크" in explain_error(Exception("[Errno 1] Operation not permitted: Cookies.binarycookies"), "safari")
+    assert "찾지 못했습니다" in explain_error(Exception("could not find chrome cookies database"), "chrome")
+    assert "로그인" in explain_error(Exception("ERROR: The playlist does not exist."), "")
