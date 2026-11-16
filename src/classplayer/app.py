@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (QAbstractSpinBox, QButtonGroup, QFrame, QApplicat
                                QRadioButton, QScrollArea, QStackedWidget, QTextEdit, QToolButton, QVBoxLayout, QWidget)
 
 from classplayer import __version__, bootstrap
-from classplayer.bootstrap import APP_NAME, AUDIO_EXTENSIONS, MEDIA_EXTENSIONS, VIDEO_EXTENSIONS
+from classplayer.bootstrap import APP_NAME, AUDIO_EXTENSIONS, MEDIA_EXTENSIONS
 from classplayer.record import LocalRecordJob, LocalRecordRequest, make_url_record_job
 from classplayer.ui import icons
 from classplayer.ui.music_view import MusicView
@@ -34,11 +34,11 @@ from classplayer.player.mpv_widget import MpvWidget
 from classplayer.player.thumbnails import ThumbnailProvider
 from classplayer.player.controls import fmt_time
 from classplayer.settings import Settings
-from classplayer.ui.theme import AMBER, QSS, apply_palette
+from classplayer.ui.theme import QSS, apply_palette
 from classplayer.youtube.common import is_url, is_youtube_url, start_seconds, youtube_video_id
 from classplayer.youtube.download import PRESETS, DownloadJob, DownloadRequest
 from classplayer.youtube.probe import probe_spherical
-from classplayer.youtube.search import SearchResult, YouTubeSearcher, fmt_views
+from classplayer.youtube.search import YouTubeSearcher, fmt_views
 from classplayer.youtube.sponsorblock import SponsorSkipper
 from classplayer.youtube.stream import StreamResolver
 
@@ -988,7 +988,7 @@ class MainWindow(QMainWindow):
         btn_open = topbtn("파일", "folder")
         btn_open.clicked.connect(self.open_file_dialog)
         urlrow = QHBoxLayout()
-        urlrow.setContentsMargins(14, 9, 14, 9)
+        urlrow.setContentsMargins(12, 6, 12, 6)   # 영상 자리를 넓히려고 위아래를 얇게
         urlrow.setSpacing(10)
         urlrow.addWidget(logo)
         urlrow.addWidget(brand)
@@ -1196,6 +1196,7 @@ class MainWindow(QMainWindow):
         p.hwdec_changed.connect(self._on_hwdec)
         p.codec_changed.connect(self._on_codec)
         p.video_size_changed.connect(lambda _w, _h: self._update_info())
+        p.video_size_changed.connect(self._on_video_size_for_fit)
         p.log_message.connect(self._on_log)
         p.clicked.connect(self.player.toggle_pause)
         p.double_clicked.connect(self.toggle_fullscreen)
@@ -1276,6 +1277,9 @@ class MainWindow(QMainWindow):
         m_view = mb.addMenu("보기")
         act(m_view, "전체화면", self.toggle_fullscreen, "Ctrl+F")
         self.a_vr = act(m_view, "360도 모드", lambda on: self.set_vr(on), checkable=True)
+        act(m_view, "창을 영상 크기에 맞추기 (검은 띠 없애기)", lambda: self.fit_window_to_video(user=True), "Ctrl+0")
+        self.a_fit = act(m_view, "영상 열 때 창 크기 자동 맞추기", lambda on: setattr(self.settings, "fit_window", on),
+                         checkable=True, checked=self.settings.fit_window)
         act(m_view, "시점 초기화", self.player.vr_reset)
         m_proj = m_view.addMenu("360도 투영 방식")
         g = QActionGroup(self)
@@ -1404,6 +1408,12 @@ class MainWindow(QMainWindow):
         self._last_clip = QApplication.clipboard().text().strip()
         self.set_vr(False)
         self._media_audio = (not is_url(target)) and Path(target).suffix.lower() in AUDIO_EXTENSIONS
+        self._fit_pending = True       # 이 파일의 영상 크기를 처음 알게 되면 창을 한 번 맞춘다
+        try:   # 음악 파일·소리만 재생 때 끈 영상 트랙을 되살린다 (안 그러면 다음 영상이 화면 없이 나옴).
+            # 소리만 재생이어도 일단 켜서 연다: 소리 없는 영상에 vid=no 로 열면 mpv 가 '재생할 트랙 없음'으로 실패한다.
+            self.player.mpv["vid"] = "auto"
+        except Exception:  # noqa: BLE001
+            pass
         self._cover_for = ""
         self.music.set_cover(None)
         self._apply_music_mode()
@@ -2267,7 +2277,12 @@ class MainWindow(QMainWindow):
             self._media_audio = True
         elif real_video:
             self._media_audio = False
-        if self._audio_only or self._media_audio:
+        has_audio = any(t.get("type") == "audio" for t in tracks)
+        if self._audio_only and not has_audio and real_video:
+            self.a_audio_only.setChecked(False)
+            self.toggle_audio_only(False)
+            self.notify("이 영상에는 소리가 없어 화면을 보여 줍니다 (소리만 재생 끔)", 5000)
+        elif self._audio_only or self._media_audio:
             self.player.mpv["vid"] = "no"     # 표지 그림은 mpv 가 아니라 음악 화면이 그린다
         self._apply_music_mode()
         self.player.add_pending_subtitles()
@@ -2590,6 +2605,13 @@ class MainWindow(QMainWindow):
             return None
 
     def toggle_audio_only(self, on: bool) -> None:
+        tracks = self.player.property("track-list", []) or []
+        if on and tracks and not any(t.get("type") == "audio" for t in tracks):
+            # 소리 없는 영상에서 영상을 끄면 mpv 가 재생할 것이 없어 멈춘다
+            self.a_audio_only.setChecked(False)
+            self.controls.set_audio_only(False)
+            self.notify("이 영상에는 소리가 없어 '소리만 재생'을 쓸 수 없습니다", 4000)
+            return
         self._audio_only = on
         self.controls.set_audio_only(on)
         try:
@@ -2678,6 +2700,74 @@ class MainWindow(QMainWindow):
                 d.setVisible(vis)
             self._fullscreen = False
             self.player.setCursor(Qt.CursorShape.OpenHandCursor if self.player.vr_enabled else Qt.CursorShape.ArrowCursor)
+
+    # ------------------------------------------------------------------ 창을 영상 비율에 맞추기
+    def _on_video_size_for_fit(self, w: int, h: int) -> None:
+        if not getattr(self, "_fit_pending", False) or not (w and h):
+            return
+        self._fit_pending = False
+        if self.settings.fit_window:
+            # 360 감지·음악 판정이 끝난 뒤에 맞춘다
+            QTimer.singleShot(350, self.fit_window_to_video)
+
+    def fit_window_to_video(self, user: bool = False, _again: bool = True) -> bool:
+        """영상 비율을 그대로 두고(자르거나 늘이지 않음) 창 크기를 바꿔 위아래·양옆 검은 띠를 없앤다.
+
+        영상 자리의 폭을 그대로 두고 높이를 맞추되, 화면을 넘으면 화면 안에서 가장 크게 줄인다(세로 영상 포함).
+        전체화면·최대화·360도·음악 화면일 때는 하지 않는다.
+        """
+        vw, vh = self.player.video_size
+        why = ""
+        if not (vw and vh) or self._music_on:
+            why = "맞출 영상이 없습니다"
+        elif self.player.vr_enabled:
+            why = "360도 영상은 보는 방향에 따라 화면이 바뀌어 맞추지 않습니다"
+        elif self._fullscreen or self.isMaximized() or self.isFullScreen():
+            why = "전체화면·최대화 중에는 창 크기를 바꿀 수 없습니다"
+        if why:
+            if user:
+                self.notify(why, 3000)
+            return False
+        a = vw / vh
+        sw, sh = self.stage.width(), self.stage.height()
+        # 사용자가 정한 창 폭(마지막으로 손으로 바꾼 크기)에서 시작한다: 세로 영상 뒤에 가로 영상이 작아지지 않게
+        base = getattr(self, "_fit_base_win_w", 0) or self.width()
+        start_w = max(320, sw + base - self.width())
+        scr = (self.screen() or QApplication.primaryScreen()).availableGeometry()
+        fg, g = self.frameGeometry(), self.geometry()
+        frame_w, frame_h = fg.width() - g.width(), fg.height() - g.height()
+        chrome_w, chrome_h = self.width() - sw, self.height() - sh
+        max_sw = max(320, scr.width() - frame_w - chrome_w)
+        max_sh = max(180, scr.height() - frame_h - chrome_h)
+        new_sw, new_sh = min(start_w, max_sw), round(min(start_w, max_sw) / a)
+        if new_sh > max_sh:
+            new_sh = max_sh
+            new_sw = round(new_sh * a)
+        if new_sw > max_sw:
+            new_sw = max_sw
+            new_sh = round(new_sw / a)
+        if new_sh < 200:               # 너무 납작해지지 않게
+            new_sh = 200
+            new_sw = min(max_sw, round(new_sh * a))
+        if not getattr(self, "_fit_base_win_w", 0):
+            self._fit_base_win_w = self.width()
+        if abs(new_sw - sw) < 3 and abs(new_sh - sh) < 3:
+            return True
+        self._fitting = True
+        self.resize(self.width() + new_sw - sw, self.height() + new_sh - sh)
+
+        def settle() -> None:
+            self._fitting = False
+            if _again:   # 폭이 바뀌면 위아래 막대 높이도 바뀔 수 있어 한 번 더 맞춘다
+                self.fit_window_to_video(_again=False)
+        QTimer.singleShot(60, settle)
+        # 화면 밖으로 나가면 안으로 들인다
+        fg = self.frameGeometry()
+        dx = min(0, scr.right() - fg.right()) or max(0, scr.left() - fg.left())
+        dy = min(0, scr.bottom() - fg.bottom()) or max(0, scr.top() - fg.top())
+        if dx or dy:
+            self.move(self.x() + dx, self.y() + dy)
+        return True
 
     def _show_dock(self, dock: QDockWidget) -> None:
         """도크를 보이게 한다. 전체화면 중이면 지금은 숨긴 채로 두고 전체화면을 끝낼 때 보이게 한다."""
@@ -2849,6 +2939,10 @@ class MainWindow(QMainWindow):
         super().resizeEvent(e)
         if hasattr(self, "search_panel"):
             self._place_search_panel()
+        # 사용자가 손으로 바꾼 창 폭을 기억 (창 맞추기가 바꾼 것·전체화면·최대화는 제외)
+        if not getattr(self, "_fitting", False) and not self._fullscreen and not self.isMaximized() \
+                and not self.isFullScreen() and self.isVisible():
+            self._fit_base_win_w = self.width()
 
     def closeEvent(self, e: QCloseEvent) -> None:
         self.downloads.cancel_all()

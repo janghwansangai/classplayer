@@ -33,7 +33,7 @@ def register_default_player() -> str:
     setval(rf"Software\Classes\{PROG_ID}", None, "ClassPlayer 영상")
     setval(rf"Software\Classes\{PROG_ID}\DefaultIcon", None, f'"{sys.executable}",0')
     setval(rf"Software\Classes\{PROG_ID}\shell\open\command", None, cmd)
-    setval(rf"Software\Classes\Applications\ClassPlayer.exe\shell\open\command", None, cmd)
+    setval(r"Software\Classes\Applications\ClassPlayer.exe\shell\open\command", None, cmd)
     setval(rf"{APP_KEY}\Capabilities", "ApplicationName", "ClassPlayer")
     setval(rf"{APP_KEY}\Capabilities", "ApplicationDescription", "수업용 영상 플레이어")
     for ext in sorted(VIDEO_EXTENSIONS):

@@ -9,7 +9,6 @@ from __future__ import annotations
 import math
 from pathlib import Path
 import os
-import sys
 from typing import Any
 
 from PySide6.QtCore import QByteArray, QEvent, QPointF, Qt, Signal
@@ -325,14 +324,21 @@ class MpvWidget(QOpenGLWidget):
     def set_pause(self, paused: bool) -> None:
         self.mpv.pause = paused
 
+    def _cmd(self, *args) -> None:
+        """재생 조작 명령. 파일을 여는 중·열기 전에는 mpv 가 오류를 내므로 조용히 무시한다."""
+        try:
+            self.mpv.command(*args)
+        except SystemError:
+            pass
+
     def seek_relative(self, seconds: float) -> None:
-        self.mpv.command("seek", seconds, "relative")
+        self._cmd("seek", seconds, "relative")
 
     def seek_absolute(self, seconds: float, exact: bool = True) -> None:
-        self.mpv.command("seek", seconds, "absolute+exact" if exact else "absolute+keyframes")
+        self._cmd("seek", seconds, "absolute+exact" if exact else "absolute+keyframes")
 
     def frame_step(self, back: bool = False) -> None:
-        self.mpv.command("frame-back-step" if back else "frame-step")
+        self._cmd("frame-back-step" if back else "frame-step")
 
     def set_volume(self, volume: float) -> None:
         self.mpv.volume = max(0.0, min(150.0, float(volume)))

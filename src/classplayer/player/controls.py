@@ -246,7 +246,7 @@ class ControlBar(QWidget):
         self.btn_full.clicked.connect(self.fullscreen_clicked)
 
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(16, 8, 16, 8)
+        lay.setContentsMargins(12, 5, 12, 5)   # 영상 자리를 넓히려고 위아래를 얇게
         lay.setSpacing(6)
         for w in (self.btn_back, self.btn_play, self.btn_fwd):
             lay.addWidget(w)

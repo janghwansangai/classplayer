@@ -582,7 +582,9 @@ class LibraryPanel(QWidget):
     def _on_clicked(self, item: QListWidgetItem) -> None:
         root = self.header_root(item)
         if root is not None:
-            self.toggle_collapsed(root)
+            # 클릭 처리 도중에 목록을 비우고 다시 채우면 Qt 가 지워진 항목을 건드려 죽을 수 있어 한 박자 늦춘다
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, lambda r=root: self.toggle_collapsed(r))
 
     def _on_activated(self, item: QListWidgetItem) -> None:
         path = item.data(Qt.ItemDataRole.UserRole)

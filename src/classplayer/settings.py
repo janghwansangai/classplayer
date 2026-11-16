@@ -110,6 +110,15 @@ class Settings:
     def audio_device(self, d: str) -> None:
         self.q.setValue("audio/device", d)
 
+    @property
+    def fit_window(self) -> bool:
+        """영상을 열 때 창 크기를 영상 비율에 맞춰 검은 띠를 없앤다."""
+        return self.q.value("view/fit_window", True, type=bool)
+
+    @fit_window.setter
+    def fit_window(self, on: bool) -> None:
+        self.q.setValue("view/fit_window", bool(on))
+
     # --- 일반 ---
     @property
     def volume(self) -> int:

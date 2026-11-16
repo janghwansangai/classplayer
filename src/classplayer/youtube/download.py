@@ -247,7 +247,6 @@ class DownloadJob(QObject):
 
     def _run(self) -> None:
         try:
-            import yt_dlp
 
             opts = self._build_opts()
             try:

@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import hashlib
-import subprocess
 import threading
 import time
 import urllib.request
