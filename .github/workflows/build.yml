@@ -69,8 +69,10 @@ jobs:
           }
           # PATH 에서 choco 를 빼고 번들 파일만으로 실행되는지
           $env:PATH = "C:\Windows\System32"
-          & dist\ClassPlayer\_internal\ffmpeg.exe -version | Select-Object -First 1
+          # 출력을 다 받은 뒤 첫 줄만 보여 준다 (Select-Object -First 로 파이프를 끊으면 종료 코드가 0 이 아니게 됨)
+          $out = & dist\ClassPlayer\_internal\ffmpeg.exe -version
           if ($LASTEXITCODE -ne 0) { throw "bundled ffmpeg failed" }
+          Write-Host ($out | Select-Object -First 1)
       - name: 자가 점검 (실패해도 계속)
         continue-on-error: true
         shell: pwsh
