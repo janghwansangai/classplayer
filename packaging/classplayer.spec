@@ -13,7 +13,7 @@ IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform == "win32"
 # 앱 정보(크래시 보고서 등)에 실제 버전이 찍히게 __init__.py 의 __version__ 을 읽는다 (예전엔 0.1.0 고정)
 import re
-APP_VERSION = re.search(r'__version__ = "(.+?)"', (SRC / "classplayer" / "__init__.py").read_text()).group(1)
+APP_VERSION = re.search(r'__version__ = "(.+?)"', (SRC / "classplayer" / "__init__.py").read_text(encoding="utf-8")).group(1)
 
 
 def find(name, extra_dirs=()):
