@@ -1266,7 +1266,8 @@ class MainWindow(QMainWindow):
         c.record_clicked.connect(self.open_record_dialog)
         c.range_edited.connect(self._on_range_edited)
         c.range_context.connect(self._on_range_context)
-        c.audio_only_toggled.connect(lambda on: self.a_audio_only.setChecked(on))
+        # 헤드셋 버튼: 메뉴 체크만 바꾸면 안 된다(메뉴 동작은 triggered 에만 이어져 있음) → 직접 켜고 끈다
+        c.audio_only_toggled.connect(self._on_audio_button)
         c.speed_changed.connect(self._show_speed_hud)
 
     def _build_menus(self) -> None:
@@ -1963,6 +1964,8 @@ class MainWindow(QMainWindow):
 
     def _show_hud_info(self) -> None:
         """파일을 연 직후 몇 초 동안 코덱·해상도·디코딩 방식을 보여 준다."""
+        if self._music_on:      # 음악 화면에는 영상 정보 알약을 띄우지 않는다
+            return
         w, h = self.player.video_size
         codec = self._codec.split(" ")[0].upper() if self._codec else ""
         if not codec:
@@ -2573,6 +2576,7 @@ class MainWindow(QMainWindow):
         if on:
             if self.player.vr_enabled:
                 self.set_vr(False)
+            self._hide_hud_info()          # 영상 정보(코덱·해상도) 알약은 음악 화면에 필요 없다
             self._refresh_music_info()
             self.music.set_playing(not bool(self.player.property("pause", True)))
             self._load_cover()
@@ -2653,6 +2657,12 @@ class MainWindow(QMainWindow):
             return -90.0 if v in (None, "-inf") else float(v)
         except (TypeError, ValueError):
             return None
+
+    def _on_audio_button(self, on: bool) -> None:
+        if on == self._audio_only:
+            return
+        self.a_audio_only.setChecked(on)
+        self.toggle_audio_only(on)
 
     def toggle_audio_only(self, on: bool) -> None:
         tracks = self.player.property("track-list", []) or []
