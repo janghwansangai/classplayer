@@ -57,6 +57,8 @@ jobs:
           Move-Item bin\bgutil-pot-windows-x86_64.exe bin\bgutil-pot.exe -Force
       - name: 단위 테스트
         run: uv run pytest -q tests/test_units.py
+      - name: 오픈소스 라이선스 고지 만들기
+        run: uv run python packaging/make_licenses.py
       - name: 빌드
         run: uv run pyinstaller --noconfirm --clean packaging/classplayer.spec
       - name: 번들 ffmpeg 확인 (심이 아니고 실제로 실행되는지)

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>오픈소스 라이선스 · ClassPlayer</title>
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<style>
+  :root { --bg:#141518; --panel:#1b1c21; --line:#2a2b31; --text:#e7e8ec; --muted:#9a9ca6; --amber2:#fbbf24; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,"Apple SD Gothic Neo","Pretendard","Malgun Gothic",system-ui,sans-serif; line-height:1.6; }
+  a { color:var(--amber2); word-break:break-all; }
+  .wrap { max-width:1000px; margin:0 auto; padding:32px 16px 56px; }
+  h1 { font-size:clamp(24px,4vw,34px); margin:8px 0 12px; }
+  h2 { font-size:20px; margin:32px 0 10px; }
+  p, li { color:var(--muted); }
+  .table { overflow-x:auto; border:1px solid var(--line); border-radius:12px; }
+  table { border-collapse:collapse; width:100%; min-width:640px; font-size:14px; }
+  th, td { text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { background:var(--panel); }
+  tr:last-child td { border-bottom:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a href="./">← ClassPlayer 소개로</a>
+  <h1>오픈소스 라이선스</h1>
+  <p>ClassPlayer 는 아래 오픈소스 소프트웨어를 함께 담아 배포합니다. 각 구성 요소는 표에 적힌 라이선스를 따릅니다.
+  라이선스 전문은 앱의 <b>도움말 › 오픈소스 라이선스</b>와
+  <a href="https://github.com/janghwansangai/classplayer/tree/main/src/classplayer/assets/licenses">GitHub</a>에 있습니다.</p>
+  <h2>소스 코드</h2>
+  <ul>
+    <li>ClassPlayer 자체 소스: <a href="https://github.com/janghwansangai/classplayer">github.com/janghwansangai/classplayer</a></li>
+    <li>GPL·LGPL 구성 요소의 소스 코드는 아래 주소에서 받을 수 있습니다. 앱에 넣은 바로 그 버전의 소스가 필요하면 ClassPlayer 저장소의 이슈로 요청해 주세요.</li>
+    <li>Qt(LGPL-3.0)는 동적 라이브러리로 들어 있어, 같은 버전의 다른 Qt 라이브러리로 바꿔 쓸 수 있습니다.</li>
+  </ul>
+  <h2>실행 파일·라이브러리</h2>
+  <div class="table"><table>
+    <tr><th>구성 요소</th><th>라이선스</th><th>하는 일</th><th>소스</th></tr>
+<tr><td>Python 3.12</td><td>PSF-2.0</td><td>프로그램 실행</td><td><a href="https://www.python.org/downloads/source/">www.python.org/downloads/source/</a></td></tr>
+<tr><td>mpv / libmpv</td><td>GPL-2.0-or-later</td><td>영상·소리 재생 엔진</td><td><a href="https://github.com/mpv-player/mpv">github.com/mpv-player/mpv</a></td></tr>
+<tr><td>FFmpeg (ffmpeg, ffprobe, libav*)</td><td>GPL-3.0-or-later (x264·x265 등 GPL 구성 요소 포함 빌드)</td><td>코덱, 합치기·녹화·미리보기</td><td><a href="https://ffmpeg.org/download.html#get-sources">ffmpeg.org/download.html#get-sources</a></td></tr>
+<tr><td>Deno</td><td>MIT</td><td>유튜브 JS 계산</td><td><a href="https://github.com/denoland/deno">github.com/denoland/deno</a></td></tr>
+<tr><td>bgutil-ytdlp-pot-provider-rs (bgutil-pot + yt-dlp 플러그인)</td><td>GPL-3.0-or-later</td><td>유튜브 PO 토큰</td><td><a href="https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs">github.com/jim60105/bgutil-ytdlp-pot-provider-rs</a></td></tr>
+<tr><td>PyInstaller 부트로더</td><td>GPL-2.0-or-later + 배포 예외(묶은 앱은 어떤 라이선스로든 배포 가능)</td><td>실행 파일 시작</td><td><a href="https://github.com/pyinstaller/pyinstaller">github.com/pyinstaller/pyinstaller</a></td></tr>
+  </table></div>
+  <h2>파이썬 패키지</h2>
+  <div class="table"><table>
+    <tr><th>구성 요소</th><th>버전</th><th>라이선스</th><th>하는 일</th><th>소스</th></tr>
+<tr><td>Qt 6 / PySide6</td><td>6.12.0</td><td>LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only</td><td>화면(창·버튼) 그리기</td><td><a href="https://code.qt.io/cgit/pyside/pyside-setup.git/">code.qt.io/cgit/pyside/pyside-setup.git/</a></td></tr>
+<tr><td>Shiboken6</td><td>6.12.0</td><td>LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only</td><td>PySide6 연결</td><td><a href="https://code.qt.io/cgit/pyside/pyside-setup.git/">code.qt.io/cgit/pyside/pyside-setup.git/</a></td></tr>
+<tr><td>python-mpv</td><td>1.0.8</td><td>GNU General Public License v2 or later (GPLv2+) / GNU Lesser General Public License v2 or later (LGPLv2+)</td><td>mpv 재생 엔진 연결</td><td><a href="https://github.com/jaseg/python-mpv">github.com/jaseg/python-mpv</a></td></tr>
+<tr><td>yt-dlp</td><td>2026.10.26</td><td>Unlicense</td><td>유튜브 주소 풀기·내려받기</td><td><a href="https://github.com/yt-dlp/yt-dlp">github.com/yt-dlp/yt-dlp</a></td></tr>
+<tr><td>yt-dlp-ejs</td><td>0.8.0</td><td>Unlicense AND MIT AND ISC</td><td>유튜브 JS 계산 도우미</td><td><a href="https://github.com/yt-dlp/ejs">github.com/yt-dlp/ejs</a></td></tr>
+<tr><td>mutagen</td><td>1.48.1</td><td>GPL-2.0-or-later</td><td>음악 파일 정보(yt-dlp)</td><td><a href="https://github.com/quodlibet/mutagen">github.com/quodlibet/mutagen</a></td></tr>
+<tr><td>PyOpenGL</td><td>3.1.10</td><td>BSD License</td><td>360도 화면 그리기</td><td><a href="https://github.com/mcfletch/pyopengl">github.com/mcfletch/pyopengl</a></td></tr>
+<tr><td>curl_cffi</td><td>0.17.0</td><td>MIT</td><td>유튜브 접속(브라우저 흉내)</td><td><a href="https://github.com/lexiforest/curl_cffi">github.com/lexiforest/curl_cffi</a></td></tr>
+<tr><td>cffi</td><td>2.1.1</td><td>MIT-0</td><td>C 라이브러리 연결</td><td><a href="https://github.com/python-cffi/cffi">github.com/python-cffi/cffi</a></td></tr>
+<tr><td>pycparser</td><td>3.12</td><td>BSD-3-Clause</td><td>cffi 보조</td><td><a href="https://github.com/eliben/pycparser">github.com/eliben/pycparser</a></td></tr>
+<tr><td>truststore</td><td>0.10.5</td><td>MIT</td><td>운영체제 인증서로 HTTPS 확인</td><td><a href="https://github.com/sethmlarson/truststore">github.com/sethmlarson/truststore</a></td></tr>
+<tr><td>certifi</td><td>2026.10.23</td><td>Mozilla Public License 2.0 (MPL 2.0)</td><td>HTTPS 인증서 목록</td><td><a href="https://github.com/certifi/python-certifi">github.com/certifi/python-certifi</a></td></tr>
+<tr><td>Brotli</td><td>1.2.1</td><td>MIT</td><td>압축 해제</td><td><a href="https://github.com/google/brotli">github.com/google/brotli</a></td></tr>
+<tr><td>PyCryptodome</td><td>3.24.2</td><td>BSD License / Public Domain</td><td>암호 계산(yt-dlp)</td><td><a href="https://github.com/Legrandin/pycryptodome">github.com/Legrandin/pycryptodome</a></td></tr>
+<tr><td>websockets</td><td>17.4</td><td>BSD-3-Clause</td><td>실시간 연결(yt-dlp)</td><td><a href="https://github.com/python-websockets/websockets">github.com/python-websockets/websockets</a></td></tr>
+<tr><td>requests</td><td>2.34.2</td><td>Apache Software License</td><td>HTTP(yt-dlp)</td><td><a href="https://github.com/psf/requests">github.com/psf/requests</a></td></tr>
+<tr><td>urllib3</td><td>2.8.0</td><td>MIT</td><td>HTTP</td><td><a href="https://github.com/urllib3/urllib3">github.com/urllib3/urllib3</a></td></tr>
+<tr><td>idna</td><td>3.20</td><td>BSD-3-Clause</td><td>국제 도메인 이름</td><td><a href="https://github.com/kjd/idna">github.com/kjd/idna</a></td></tr>
+<tr><td>charset-normalizer</td><td>3.5.2</td><td>MIT</td><td>글자 인코딩 판별</td><td><a href="https://github.com/jawah/charset_normalizer">github.com/jawah/charset_normalizer</a></td></tr>
+  </table></div>
+  <p>FFmpeg·mpv 와 함께 들어 있는 코덱·자막 라이브러리(x264, x265, dav1d, libass, freetype 등)는 각자의 라이선스를 따르며,
+  소스는 FFmpeg·mpv 빌드 안내(위 주소)에서 찾을 수 있습니다. YouTube는 Google LLC의 상표입니다.</p>
+</div>
+</body>
+</html>

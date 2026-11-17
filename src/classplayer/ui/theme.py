@@ -52,6 +52,7 @@ QPushButton:pressed {{ background: {LINE2}; }}
 QPushButton:disabled {{ color: #5b5e69; }}
 QPushButton#primary {{ background: {AMBER}; color: #1b1206; }}
 QPushButton#primary:hover {{ background: {AMBER_HOVER}; }}
+QPushButton#primary:disabled {{ background: {AMBER_DIM}; color: #8b8e99; }}
 QPushButton#danger {{ background: #ef4444; color: #ffffff; }}
 QPushButton#chip {{ min-height: 24px; padding: 0 10px; border-radius: 12px; font-size: 11.5px; font-weight: 600;
                     background: {RAISED}; color: #c3c5cd; }}

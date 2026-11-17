@@ -73,6 +73,8 @@ if pot.exists():
     binaries.append((str(pot), "."))
 
 datas = [(str(SRC / "classplayer" / "assets" / "icon.png"), "assets"),
+         # 오픈소스 라이선스 고지와 전문 (packaging/make_licenses.py 가 만듦, 도움말 › 오픈소스 라이선스)
+         (str(SRC / "classplayer" / "assets" / "licenses"), "assets/licenses"),
          # yt-dlp 가 파일 시스템에서 찾는 플러그인이라 .py 그대로 넣는다 (bootstrap.enable_po_token_plugin)
          (str(SRC / "classplayer" / "vendor" / "yt_dlp_plugins"), "classplayer_vendor/yt_dlp_plugins")] + collect_data_files("yt_dlp_ejs") + collect_data_files("yt_dlp", includes=["**/*.json"])
 hiddenimports = (collect_submodules("yt_dlp") + collect_submodules("yt_dlp_ejs") + collect_submodules("OpenGL")

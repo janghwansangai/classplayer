@@ -12,6 +12,7 @@ if not exist bin\libmpv-2.dll (
   exit /b 1
 )
 rmdir /s /q build dist 2>nul
+uv run python packaging\make_licenses.py
 uv run pyinstaller --noconfirm --clean packaging\classplayer.spec
 if errorlevel 1 exit /b 1
 echo == 자가 점검 ==

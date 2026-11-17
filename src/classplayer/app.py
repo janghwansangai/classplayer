@@ -26,6 +26,7 @@ from classplayer.ui import icons
 from classplayer.library.autodownload import (LIKED_URL, WATCH_LATER_URL, AutoDownloader, AutoDownloadStore, Source,
                                               is_playlist_url, playlist_url)
 from classplayer.ui.autodownload_panel import AutoDownloadPanel, LikedDialog
+from classplayer.ui.legal import NOTICE_VERSION, LicenseDialog, NoticeDialog
 from classplayer.ui.music_view import MusicView
 from classplayer.ui.stitch_dialog import StitchDialog
 from classplayer.ui.playlist_panel import PlaylistPanel
@@ -1384,6 +1385,9 @@ class MainWindow(QMainWindow):
         m_help.addSeparator()
         act(m_help, "업데이트 확인…", lambda: self.check_update(silent=False))
         act(m_help, "오류 신고…", self.report_bug)
+        m_help.addSeparator()
+        act(m_help, "이용 안내 (저작권·개인정보)…", lambda: NoticeDialog(self).exec())
+        act(m_help, "오픈소스 라이선스…", lambda: LicenseDialog(self).exec())
 
     # ------------------------------------------------------------------ 열기/재생
     def play_from_url_bar(self) -> None:
@@ -3187,6 +3191,15 @@ def main() -> None:
         app.setWindowIcon(QIcon(str(icon_path)))
     win = MainWindow()
     win.show()
+    # 처음 실행(또는 안내 내용이 바뀐 뒤 첫 실행)에는 이용 안내를 확인받는다. 거절하면 끝낸다.
+    st = win.settings
+    if int(st.q.value("notice/accepted", 0) or 0) < NOTICE_VERSION and not os.environ.get("CLASSPLAYER_SELFTEST") \
+            and not os.environ.get("CLASSPLAYER_SKIP_NOTICE"):
+        if NoticeDialog(win, first_run=True).exec() != QDialog.DialogCode.Accepted:
+            win.close()
+            sys.exit(0)
+        st.q.setValue("notice/accepted", NOTICE_VERSION)
+        st.q.sync()
     if sys.platform.startswith("win") and bootstrap.bundled_dir():
         # 지난 업데이트 때 잠겨 있어 비켜 둔 옛 파일(*.cpold) 지우기
         from classplayer.update_apply import cleanup_old_files
