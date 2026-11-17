@@ -88,7 +88,7 @@ QDockWidget {{ color: {MUTED}; titlebar-close-icon: none; titlebar-normal-icon: 
 QDockWidget::title {{ background: {PANEL}; padding: 10px 14px 6px; font-weight: 600; font-size: 12px; }}
 QWidget#library, QWidget#downloads {{ background: {PANEL}; }}
 QWidget#library QListWidget {{ background: transparent; border: none; outline: 0; }}
-QWidget#library QListWidget::item {{ border-radius: 10px; padding: 6px; margin: 2px 0; color: {TEXT}; }}
+QWidget#library QListWidget::item {{ border-radius: 10px; padding: 6px; margin: 2px 0; }}
 QWidget#library QListWidget::item:selected {{ background: {RAISED}; border: 1px solid {LINE2}; color: {TEXT}; }}
 QWidget#library QListWidget::item:hover {{ background: #1f2026; }}
 QWidget#library QToolButton {{ border: none; border-radius: 8px; background: {RAISED}; min-width: 28px; min-height: 28px; }}
@@ -97,7 +97,11 @@ QWidget#library QToolButton:hover {{ background: #30313a; }}
 /* 하단 컨트롤 */
 QWidget#controls {{ background: {PANEL}; border-top: 1px solid {LINE}; }}
 QWidget#controls[overlay="true"] {{ background: #0f1013; border-top: 1px solid {LINE}; }}
-QWidget#controls QToolButton {{ border: none; border-radius: 9px; min-width: 34px; min-height: 34px; background: transparent; color: {ICON}; }}
+QWidget#controls QToolButton#srcbadge {{ border-radius: 12px; min-height: 24px; max-height: 26px; padding: 0 10px;
+    font-size: 12px; font-weight: 700; }}
+QWidget#controls QToolButton#srcbadge[kind="playlist"] {{ background: #3b2f12; color: #fbbf24; border: 1px solid #5a4512; }}
+QWidget#controls QToolButton#srcbadge[kind="library"] {{ background: #16243a; color: #93c5fd; border: 1px solid #23406b; }}
+QWidget#controls QToolButton {{ border: none; border-radius: 9px; min-width: 32px; min-height: 34px; background: transparent; color: {ICON}; }}
 QWidget#controls QToolButton:hover {{ background: {RAISED}; }}
 QWidget#controls QToolButton:checked {{ background: {AMBER_DIM}; }}
 QWidget#controls QToolButton#play {{ background: {AMBER}; border-radius: 12px; min-width: 42px; min-height: 42px; max-width: 42px; max-height: 42px; }}

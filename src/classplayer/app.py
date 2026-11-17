@@ -151,6 +151,18 @@ class DownloadDialog(QDialog):
         )
 
 
+def _dot_icon(color: str) -> QIcon:
+    pm = QPixmap(16, 16)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(color))
+    p.drawEllipse(4, 4, 8, 8)
+    p.end()
+    return QIcon(pm)
+
+
 def find_proxy_file(path: str) -> str | None:
     """360 카메라 원본 옆의 저해상도 미리보기 파일.
 
@@ -1091,7 +1103,7 @@ class MainWindow(QMainWindow):
         # --- 도크: 라이브러리, 다운로드
         self.library = LibraryPanel(self.settings.library_folders, [self.settings.download_dir],
                                     ffmpeg=self.ffmpeg, ffprobe=self.ffprobe)
-        self.library.play_requested.connect(self.open_target)
+        self.library.play_requested.connect(self._play_from_library)
         self.library.open_saved_requested.connect(self.open_save_folder)
         self.library.change_saved_requested.connect(self._change_download_dir)
         self.library.folders_changed.connect(lambda f: setattr(self.settings, "library_folders", f))
@@ -1106,6 +1118,7 @@ class MainWindow(QMainWindow):
         self.playlist_panel.play_requested.connect(self.play_playlist)
         self.playlist_panel.add_current_requested.connect(self._add_current_to_playlist)
         self.playlists.position_changed.connect(lambda _n, _i: self._refresh_playlist_hud())
+        self.playlists.position_changed.connect(lambda _n, _i: QTimer.singleShot(0, self._update_source_ui))
         self.dock_playlist = QDockWidget("재생목록", self)
         self.dock_playlist.setObjectName("dock_playlist")
         self.dock_playlist.setWidget(self.playlist_panel)
@@ -1113,6 +1126,8 @@ class MainWindow(QMainWindow):
         self.tabifyDockWidget(self.dock_library, self.dock_playlist)
         self.dock_library.raise_()
         self._from_playlist = False
+        self._from_library = False
+        self._source = ""            # 지금 재생의 출처: "playlist" | "library" | "" (링크·파일 하나)
         self.library.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.library.list.customContextMenuRequested.connect(self._library_menu)
 
@@ -1239,6 +1254,9 @@ class MainWindow(QMainWindow):
     def _connect_player(self) -> None:
         p, c = self.player, self.controls
         p.position_changed.connect(c.set_position)
+        c.prev_clicked.connect(self.play_prev)
+        c.source_clicked.connect(self._reveal_source)
+        c.next_clicked.connect(self.play_next)
         p.position_changed.connect(self.skipper.on_position)
         p.duration_changed.connect(c.set_duration)
         p.pause_changed.connect(c.set_paused)
@@ -1254,8 +1272,7 @@ class MainWindow(QMainWindow):
         p.duration_changed.connect(self.edge.set_duration)
         p.volume_changed.connect(lambda v: self.edge.set_volume(int(v)))
         p.mute_changed.connect(self.edge.set_muted)
-        self.playlists.position_changed.connect(lambda name, _i: self.edge.set_playlist_active(bool(name)))
-        self.edge.set_playlist_active(False)
+        self.edge.set_nav("")
         self.edge.set_paused(True)
         self.edge.set_volume(int(self.settings.volume))
         QTimer.singleShot(1000, self.edge.start)
@@ -1332,8 +1349,8 @@ class MainWindow(QMainWindow):
         self.a_sponsor = act(m_play, "협찬 구간 자동 건너뛰기 (SponsorBlock)", self._toggle_sponsor, checkable=True, checked=True)
         self.a_audio_only = act(m_play, "소리만 재생 (영상 끄기)", self.toggle_audio_only, "Ctrl+B", checkable=True)
         m_play.addSeparator()
-        act(m_play, "다음 영상 (재생목록, N)", self.playlist_next)
-        act(m_play, "이전 영상 (재생목록, P)", self.playlist_prev)
+        act(m_play, "다음 영상 (재생목록·라이브러리, N)", self.play_next)
+        act(m_play, "이전 영상 (재생목록·라이브러리, P)", self.play_prev)
         act(m_play, "재생목록 보기", self.show_playlist, "Ctrl+Shift+L")
         # 반복: 안 함 / 한 곡 반복 / 목록 반복 (재생 막대 반복 버튼·재생목록 '목록 반복'과 같은 상태)
         m_rep = m_play.addMenu("반복")
@@ -1535,6 +1552,7 @@ class MainWindow(QMainWindow):
         self.search_panel.close_panel()
         if not self._from_playlist and self.playlists.active:
             self.playlists.stop()
+        self._set_source("playlist" if self._from_playlist else ("library" if self._from_library else ""))
         self._client_step = 0
         self._retry_plan = None
         self._awaiting_resolve = False
@@ -1766,6 +1784,73 @@ class MainWindow(QMainWindow):
             self.notify("재생목록이 비어 있습니다. 영상을 추가해 주세요", 4000)
             return
         self._open_playlist_item(item)
+
+    # ------------------------------------------------------------------ 이전·다음 (출처를 따라)
+    def _play_from_library(self, path: str) -> None:
+        self._from_library = True
+        try:
+            self.open_target(path)
+        finally:
+            self._from_library = False
+
+    def _set_source(self, source: str) -> None:
+        self._source = source
+        self.controls.set_nav(source)
+        if getattr(self, "edge", None):
+            self.edge.set_nav(source)
+        self._update_source_ui()
+
+    def _source_text(self) -> tuple[str, str, str]:
+        """(종류, 배지 글, 안내) — 시안 A: 재생목록 = 앰버, 라이브러리 = 파랑."""
+        if self._source == "playlist" and self.playlists.active:
+            name = self.playlists.active
+            pl = self.playlists.get(name)
+            n = len(pl.items) if pl else 0
+            i = self.playlists.index + 1
+            return ("playlist", f"재생목록 · {name} · {i}/{n}",
+                    f"재생목록 '{name}'의 {i}번째 영상을 재생 중 — 누르면 재생목록에서 보여 줍니다")
+        if self._source == "library" and self._current:
+            folder = self.library.folder_label(self._current)
+            return ("library", f"라이브러리 · {folder}",
+                    f"라이브러리 '{folder}' 폴더에서 재생 중 — 누르면 라이브러리에서 보여 줍니다")
+        return ("", "", "")
+
+    def _update_source_ui(self) -> None:
+        kind, text, tip = self._source_text()
+        self.controls.set_source_badge(kind, text, tip)
+        if getattr(self, "edge", None):
+            self.edge.set_source(kind, text)
+        self.library.set_now_playing(self._current if kind == "library" else "")
+        self._apply_tab_tips()
+
+    def _reveal_source(self) -> None:
+        """출처 배지를 누르면: 그 탭을 열고 재생 중인 줄로."""
+        if self._source == "playlist" and self.playlists.active:
+            self._show_dock(self.dock_playlist)
+            self.playlist_panel.reveal_playing()
+        elif self._source == "library":
+            self._show_dock(self.dock_library)
+            self.library.reveal(self._current)
+
+    def play_next(self) -> None:
+        self._play_step(1)
+
+    def play_prev(self) -> None:
+        self._play_step(-1)
+
+    def _play_step(self, delta: int) -> None:
+        """재생목록이면 목록 순서, 라이브러리에서 연 것이면 라이브러리에 보이는 순서로 이전·다음."""
+        if self.playlists.active:
+            (self.playlist_next if delta > 0 else self.playlist_prev)()
+            return
+        if self._source == "library" and self._current:
+            nxt = self.library.neighbor(self._current, delta)
+            if nxt:
+                self._play_from_library(nxt)
+            else:
+                self.notify("라이브러리 목록의 " + ("마지막" if delta > 0 else "첫") + " 영상입니다", 3000)
+            return
+        self.notify("이전·다음은 재생목록이나 라이브러리에서 재생할 때 쓸 수 있어요", 3500)
 
     def _open_playlist_item(self, item) -> None:
         if not item.is_link and not Path(item.target).exists():
@@ -3117,11 +3202,18 @@ class MainWindow(QMainWindow):
     def _apply_tab_tips(self) -> None:
         """옆 창이 탭으로 묶이면 Qt 가 탭 막대를 새로 만들어서, 그때마다 설명을 다시 단다."""
         from PySide6.QtWidgets import QTabBar
+        kind = self._source_text()[0] if hasattr(self, "_source") else ""
+        dot_tab = {"playlist": "재생목록", "library": "라이브러리"}.get(kind, "")
         for tb in self.findChildren(QTabBar):
             for i in range(tb.count()):
-                tip = self.TAB_TIPS.get(tb.tabText(i))
+                text = tb.tabText(i)
+                tip = self.TAB_TIPS.get(text)
                 if tip and tb.tabToolTip(i) != tip:
                     tb.setTabToolTip(i, tip)
+                if text in ("재생목록", "라이브러리"):
+                    # 재생 중인 출처 탭 옆 점 (다른 탭을 보고 있어도 어디서 재생 중인지)
+                    tb.setTabIcon(i, _dot_icon("#f59e0b" if kind == "playlist" else "#60a5fa") if text == dot_tab
+                                  else QIcon())
 
     def _localize_tooltips(self) -> None:
         if sys.platform == "darwin":
@@ -3246,9 +3338,9 @@ class MainWindow(QMainWindow):
         elif k == K.Key_R:
             p.vr_reset()
         elif k == K.Key_N:
-            self.playlist_next()
+            self.play_next()
         elif k == K.Key_P:
-            self.playlist_prev()
+            self.play_prev()
         elif k == K.Key_I:
             self._mark_now(True)
         elif k == K.Key_O:

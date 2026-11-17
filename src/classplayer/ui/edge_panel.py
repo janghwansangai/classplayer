@@ -103,6 +103,8 @@ class EdgePanel(QWidget):
 
         self.title = QLabel("열린 영상 없음", self.frame)
         self.title.setStyleSheet("color:#e7e8ec; font-weight:700; font-size:12.5px;")
+        self.src = QLabel("", self.frame)          # 출처: 재생목록(앰버) / 라이브러리(파랑)
+        self.src.hide()
         self.time = QLabel("", self.frame)
         self.time.setStyleSheet("color:#8b8e99; font-size:11.5px;")
         self.seek = ClickSlider(Qt.Orientation.Horizontal, self.frame)
@@ -112,20 +114,13 @@ class EdgePanel(QWidget):
         self.seek.sliderReleased.connect(self._seek_release)
         self.seek.clicked_value.connect(self._seek_to)
 
-        self.b_prev = tb("back10", "재생목록 이전 영상 (P)", lambda: win.playlist_prev())
-        self.b_prev.setIcon(icons.icon("play", ICON))
-        self.b_prev.setText("⏮")
+        self.b_prev = tb("prev", "이전 영상 (P)", lambda: win.play_prev())
         self.b_back = tb("back10", "10초 뒤로 (←)", lambda: win.player.seek_relative(-10))
         self.b_play = tb("play", "재생 / 일시정지 (Space)", lambda: win.player.toggle_pause(), 20)
         self.b_play.setObjectName("edgeplay")
         self.b_play.setFixedSize(36, 36)
         self.b_fwd = tb("fwd10", "10초 앞으로 (→)", lambda: win.player.seek_relative(10))
-        self.b_next = tb("fwd10", "재생목록 다음 영상 (N)", lambda: win.playlist_next())
-        for b, txt in ((self.b_prev, "⏮"), (self.b_next, "⏭")):
-            b.setIcon(icons.icon("play", ICON))
-            b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-            b.setText(txt)
-            b.setStyleSheet("font-size:15px; color:#d9dbe3;")
+        self.b_next = tb("next", "다음 영상 (N)", lambda: win.play_next())
         self.b_mute = tb("volume", "소리 끄기 / 켜기 (M)", lambda: win.player.toggle_mute())
         self.vol = QSlider(Qt.Orientation.Horizontal, self.frame)
         self.vol.setRange(0, 150)
@@ -193,9 +188,10 @@ class EdgePanel(QWidget):
             self.title.show()
             self.seek.show()
             outer.addLayout(top)
+            outer.addWidget(self.src)
             outer.addWidget(self.seek)
             outer.addLayout(row)
-            self.frame.setFixedSize(520, 108)
+            self.frame.setFixedSize(520, 124)
         m = 14                                  # 그림자 자리
         self.frame.move(m, m)
         self.setFixedSize(self.frame.width() + 2 * m, self.frame.height() + 2 * m)
@@ -424,9 +420,26 @@ class EdgePanel(QWidget):
     def set_audio_only(self, on: bool) -> None:
         self.b_audio.setIcon(icons.icon("audio", AMBER_HOVER if on else ICON))
 
-    def set_playlist_active(self, on: bool) -> None:
-        self.b_prev.setEnabled(on)
-        self.b_next.setEnabled(on)
+    def set_source(self, kind: str, text: str) -> None:
+        """제목 아래 출처 한 줄 (세로 조작판에서는 재생 버튼 안내에만)."""
+        self._src_text = text
+        if not kind or self.edge in ("left", "right"):
+            self.src.hide()
+        else:
+            color = "#fbbf24" if kind == "playlist" else "#93c5fd"
+            self.src.setStyleSheet(f"color:{color}; font-size:11.5px; font-weight:700;")
+            self.src.setText(self.src.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, 480))
+            self.src.show()
+
+    def set_nav(self, source: str) -> None:
+        """이전·다음: 재생목록이면 목록 순서, 라이브러리면 보이는 목록 순서, 아니면 꺼짐(흐리게)."""
+        on = source in ("playlist", "library")
+        where = {"playlist": "재생목록", "library": "라이브러리 목록"}.get(source, "")
+        for b, word, key, name in ((self.b_prev, "이전", "P", "prev"), (self.b_next, "다음", "N", "next")):
+            b.setEnabled(on)
+            b.setIcon(icons.icon(name, ICON if on else "#4a4c56"))
+            b.setToolTip(f"{where}의 {word} 영상 ({key})" if on else
+                         f"{word} 영상 — 재생목록이나 라이브러리에서 재생할 때 쓸 수 있어요")
 
     def close_all(self) -> None:
         self._timer.stop()

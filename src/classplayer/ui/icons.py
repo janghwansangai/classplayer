@@ -41,6 +41,11 @@ _PATHS: dict[str, str] = {
     "window": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/><path d="M6.5 6.5h.01M9 6.5h.01"/>',
     "grid": '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/>'
             '<rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>',
+    # 이전·다음: 막대 + 삼각형 (글자 기호 ⏮⏭ 는 윈도우에서 컬러 이모지로 바뀌어 그림으로 그린다)
+    "prev": '<path d="M6.5 5v14"/><path d="M18 5.8L9.6 12l8.4 6.2z" fill="C"/>',
+    "next": '<path d="M17.5 5v14"/><path d="M6 5.8L14.4 12 6 18.2z" fill="C"/>',
+    "list": '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1.2" fill="C"/>'
+            '<circle cx="4.5" cy="12" r="1.2" fill="C"/><circle cx="4.5" cy="18" r="1.2" fill="C"/>',
     "scissors": '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M8.1 7.9L20 20M8.1 16.1L20 4"/>',
 }
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QColor, QIcon
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QFileDialog, QGridLayout, QHBoxLayout, QInputDialog,
                                QLabel, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton, QSplitter,
                                QToolButton, QVBoxLayout, QWidget)
@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QFileDialog, QGridL
 from classplayer.bootstrap import MEDIA_EXTENSIONS
 from classplayer.library.playlist import PlaylistStore
 from classplayer.ui import icons
+from classplayer.ui.now_playing import PLAY_ROLE, PLAYLIST_COLOR, NowPlayingDelegate
 
 
 class _DropList(QListWidget):
@@ -113,6 +114,7 @@ class PlaylistPanel(QWidget):
         head2.addWidget(self.btn_play_all)
 
         self.list = _DropList()
+        self.list.setItemDelegate(NowPlayingDelegate(self.list))
         self.list.setToolTip("이 목록의 영상 · 두 번 누르면 그 영상부터 재생 · 파일이나 유튜브 링크를 끌어다 놓으면 추가 · 오른쪽 클릭: 위로·아래로·빼기")
         self.list.setIconSize(QSize(18, 18))
         self.list.setSpacing(1)
@@ -183,6 +185,16 @@ class PlaylistPanel(QWidget):
         self.refresh()
 
     # ------------------------------------------------------------------
+    def reveal_playing(self) -> None:
+        """재생 중인 목록을 고르고 그 줄로 스크롤."""
+        if not self.store.active:
+            return
+        self.select_list(self.store.active)
+        self.refresh_items()
+        if 0 <= self.store.index < self.list.count():
+            self.list.setCurrentRow(self.store.index)
+            self.list.scrollToItem(self.list.item(self.store.index))
+
     def current_name(self) -> str:
         it = self.lists.currentItem()
         return str(it.data(Qt.ItemDataRole.UserRole)) if it else ""
@@ -220,13 +232,15 @@ class PlaylistPanel(QWidget):
         self.btn_play_all.setEnabled(bool(p.items))
         for i, it in enumerate(p.items):
             playing = self.store.active == name and self.store.index == i
-            w = QListWidgetItem(f"{i + 1}.  " + it.label())
+            w = QListWidgetItem(f"{i + 1}.  " + it.label() + ("   ▶ 재생 중" if playing else ""))
             w.setToolTip(it.target)
             w.setIcon(QIcon(icons.pixmap("link" if it.is_link else "play", "#fbbf24" if playing else "#8b8e99", 16)))
             if playing:
                 f = w.font()
                 f.setBold(True)
                 w.setFont(f)
+                w.setData(PLAY_ROLE, PLAYLIST_COLOR)
+                w.setForeground(QColor("#fbbf24"))
             self.list.addItem(w)
         if 0 <= row < self.list.count():
             self.list.setCurrentRow(row)

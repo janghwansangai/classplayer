@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (QButtonGroup, QFileDialog, QFrame, QHBoxLayout, Q
 
 from classplayer.bootstrap import AUDIO_EXTENSIONS, MEDIA_EXTENSIONS, NO_WINDOW, is_cloud_placeholder
 from classplayer.ui import icons
+from classplayer.ui.now_playing import LIBRARY_COLOR, PLAY_ROLE, NowPlayingDelegate
 
 THUMB_W, THUMB_H = 96, 56
 REC_TAGS = ("[녹화", "[녹음")
@@ -377,6 +378,7 @@ class LibraryPanel(QWidget):
         self._sph: dict[str, bool] = {}
         self._filter = "all"
         self._folder_filter = ""          # 고른 라이브러리 폴더 ("" = 모든 폴더)
+        self._now_playing = ""            # 라이브러리에서 재생 중인 파일 (파랑으로 표시)
         self._collapsed: set[str] = set()  # 접어 둔 폴더 묶음
         self._thumbs = LibraryThumbs(ffmpeg, ffprobe)
         self._thumb_gen = 0
@@ -414,6 +416,7 @@ class LibraryPanel(QWidget):
         self.list.setIconSize(QSize(THUMB_W, THUMB_H))
         self.list.setSpacing(1)
         self.list.setUniformItemSizes(False)     # 폴더 제목 줄은 높이가 다르다
+        self.list.setItemDelegate(NowPlayingDelegate(self.list))
         self.list.itemClicked.connect(self._on_clicked)
         self.list.itemActivated.connect(self._on_activated)
         self.list.itemDoubleClicked.connect(self._on_activated)
@@ -729,8 +732,18 @@ class LibraryPanel(QWidget):
         audio = Path(e.name).suffix.lower() in AUDIO_EXTENSIONS
         item.setIcon(QIcon(badge_pixmap(jpg, dur, sph, audio)))
         kind = "소리" if audio else ("360° 영상" if sph else "")
-        meta = " · ".join(x for x in (kind, e.folder, _human_size(e.size)) if x)
+        playing = e.path == self._now_playing
+        meta = " · ".join(x for x in ("▶ 재생 중" if playing else "", kind, e.folder, _human_size(e.size)) if x)
         item.setText(f"{Path(e.name).stem}\n{meta}")
+        f = item.font()
+        f.setBold(playing)
+        item.setFont(f)
+        item.setData(PLAY_ROLE, LIBRARY_COLOR if playing else None)
+        if playing:
+            item.setForeground(QColor("#93c5fd"))
+        else:
+            from PySide6.QtGui import QBrush
+            item.setForeground(QBrush())
 
     def _start_thumbs(self, paths: list[str]) -> None:
         self._thumb_gen += 1
@@ -766,6 +779,60 @@ class LibraryPanel(QWidget):
         path = item.data(Qt.ItemDataRole.UserRole)
         if path:
             self.play_requested.emit(str(path))
+
+    def set_now_playing(self, path: str) -> None:
+        """라이브러리에서 재생 중인 파일 표시 (출처가 라이브러리가 아니면 "")."""
+        old, self._now_playing = self._now_playing, path
+        for p in {old, path}:
+            item = self._items.get(p)
+            e = next((x for x in self._entries if x.path == p), None) if item else None
+            if item and e:
+                c = self._thumbs.get(p)
+                self._apply_thumb(item, e, *(c or ("", 0.0, self._sph.get(p, False))))
+
+    def folder_label(self, path: str) -> str:
+        """파일이 속한 라이브러리 폴더 이름 (저장 폴더면 '저장 폴더')."""
+        e = next((x for x in self._entries if x.path == path), None)
+        root = e.root if e else str(Path(path).parent)
+        if root in self._extra and root not in self._folders:
+            return "저장 폴더"
+        return Path(root).name or root
+
+    def reveal(self, path: str) -> None:
+        """그 파일의 줄이 보이게: 폴더가 접혀 있으면 펴고, 걸러져 안 보이면 거르기를 풀고 스크롤."""
+        e = next((x for x in self._entries if x.path == path), None)
+        if e is None:
+            return
+        changed = False
+        if e.root in self._collapsed:
+            self._collapsed.discard(e.root)
+            changed = True
+        if path not in self._items:
+            self.search.blockSignals(True)
+            self.search.clear()
+            self.search.blockSignals(False)
+            self._filter = "all"
+            self.chips["all"].setChecked(True)
+            self._folder_filter = ""
+            self._refresh_folders()
+            changed = True
+        if changed:
+            self._apply_filter()
+        item = self._items.get(path)
+        if item:
+            self.list.setCurrentItem(item)
+            self.list.scrollToItem(item, QListWidget.ScrollHint.PositionAtCenter)
+
+    def neighbor(self, path: str, delta: int) -> str | None:
+        """라이브러리에서 이전·다음 파일 (지금 보이는 목록 순서, 접힌 폴더·제목 줄은 건너뜀)."""
+        order = [str(self.list.item(i).data(Qt.ItemDataRole.UserRole)) for i in range(self.list.count())
+                 if self.list.item(i).data(Qt.ItemDataRole.UserRole)]
+        if path not in order:                       # 검색·칩으로 안 보이면 전체 순서에서
+            order = [e.path for e in self._entries]
+        if path not in order:
+            return None
+        j = order.index(path) + delta
+        return order[j] if 0 <= j < len(order) else None
 
     def focus_search(self) -> None:
         self.search.setFocus()

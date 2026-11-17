@@ -4,6 +4,7 @@ from __future__ import annotations
 from PySide6.QtCore import QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QSlider, QStyle, QStyleOptionSlider, QToolButton,
+                               QVBoxLayout,
                                QWidget)
 
 from classplayer.ui import icons
@@ -157,6 +158,9 @@ class ControlBar(QWidget):
     screenshot_clicked = Signal()
     record_clicked = Signal()
     repeat_clicked = Signal()
+    prev_clicked = Signal()
+    source_clicked = Signal()          # 출처 배지 → 그 목록 보여 주기
+    next_clicked = Signal()
     audio_only_toggled = Signal(bool)
     range_edited = Signal(float, float)        # 탐색바에서 정한 녹화 구간 (초)
     range_context = Signal(float, object)      # 오른쪽 클릭한 시각(초), 화면 좌표
@@ -186,12 +190,27 @@ class ControlBar(QWidget):
         self.btn_play.setIconSize(QSize(20, 20))
         self.btn_play.setIcon(icons.icon("play", "#1b1206"))
         self.btn_play.clicked.connect(self.play_clicked)
+        # 시안 A: 지금 재생의 출처 배지 (재생목록 = 앰버, 라이브러리 = 파랑). 누르면 그 목록의 재생 중인 줄로
+        self.src_badge = QToolButton(self)
+        self.src_badge.setObjectName("srcbadge")
+        self.src_badge.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.src_badge.setIconSize(QSize(14, 14))
+        self.src_badge.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.src_badge.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.src_badge.clicked.connect(self.source_clicked)
+        self.src_badge.hide()
+        self.btn_prev = tool("prev", "")
+        self.btn_next = tool("next", "")
+        self.btn_prev.clicked.connect(self.prev_clicked)
+        self.btn_next.clicked.connect(self.next_clicked)
+        self.set_nav("")
         self.btn_back = tool("back10", "10초 뒤로 (←)")
         self.btn_fwd = tool("fwd10", "10초 앞으로 (→)")
         self.btn_back.clicked.connect(lambda: self._rel(-10))
         self.btn_fwd.clicked.connect(lambda: self._rel(10))
 
         self.slider = ClickSlider()
+
         self.slider.setRange(0, SLIDER_MAX)
         self.slider.sliderMoved.connect(self._on_slider_moved)
         self.slider.sliderReleased.connect(self._on_slider_released)
@@ -207,7 +226,7 @@ class ControlBar(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.lbl_time = QLabel("00:00 / 00:00")
         self.lbl_time.setObjectName("time")
-        self.lbl_time.setMinimumWidth(116)
+        self.lbl_time.setMinimumWidth(104)
         self.lbl_time.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_time.setTextFormat(Qt.TextFormat.RichText)
 
@@ -227,6 +246,7 @@ class ControlBar(QWidget):
             self.speed.addItem(f"{s:g}×", s)
         self.speed.setCurrentIndex(2)
         self.speed.setToolTip("재생 속도 ([ / ])")
+        self.speed.setFixedWidth(76)
         self.speed.currentIndexChanged.connect(lambda i: self.speed_changed.emit(float(self.speed.itemData(i))))
 
         self.btn_repeat = tool("repeat", "")
@@ -249,14 +269,23 @@ class ControlBar(QWidget):
         self.btn_full = tool("full", "전체화면 (F, 더블클릭)")
         self.btn_full.clicked.connect(self.fullscreen_clicked)
 
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(12, 5, 12, 5)   # 영상 자리를 넓히려고 위아래를 얇게
+        # 두 줄: 위는 화면 폭 전체의 탐색 막대, 아래는 버튼 (버튼이 늘어도 탐색 막대가 짧아지지 않게, 2026-11-17)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(12, 4, 12, 4)
+        outer.setSpacing(0)
+        top = QHBoxLayout()
+        top.setSpacing(10)
+        top.addWidget(self.src_badge)         # 출처 배지는 탐색 막대 왼쪽 (버튼 줄이 꽉 차서)
+        top.addWidget(self.slider, 1)
+        outer.addLayout(top)
+        lay = QHBoxLayout()
         lay.setSpacing(6)
-        for w in (self.btn_back, self.btn_play, self.btn_fwd):
+        outer.addLayout(lay)
+        for w in (self.btn_prev, self.btn_back, self.btn_play, self.btn_fwd, self.btn_next):
             lay.addWidget(w)
-        lay.addSpacing(4)
-        lay.addWidget(self.slider, 1)
+        lay.addSpacing(8)
         lay.addWidget(self.lbl_time)
+        lay.addStretch(1)
         lay.addWidget(self.btn_mute)
         lay.addWidget(self.vol)
         lay.addSpacing(6)
@@ -320,6 +349,29 @@ class ControlBar(QWidget):
         self.btn_rec.setChecked(on)
         self.btn_rec.blockSignals(False)
         self.btn_rec.setToolTip(text if on else "녹화·녹음: 전체 또는 구간을 파일로 저장 (Ctrl+R)")
+
+    def set_source_badge(self, kind: str, text: str, tip: str) -> None:
+        """kind: "playlist" | "library" | "" (숨김)."""
+        if not kind:
+            self.src_badge.hide()
+            return
+        color = AMBER_HOVER if kind == "playlist" else "#93c5fd"
+        self.src_badge.setIcon(icons.icon("list" if kind == "playlist" else "grid", color))
+        self.src_badge.setText(self.src_badge.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, 230))
+        self.src_badge.setToolTip(tip)
+        self.src_badge.setProperty("kind", kind)
+        self.src_badge.style().unpolish(self.src_badge)
+        self.src_badge.style().polish(self.src_badge)
+        self.src_badge.show()
+
+    def set_nav(self, source: str) -> None:
+        """이전·다음 버튼: 재생목록이면 목록 순서, 라이브러리면 보이는 목록 순서, 아니면 꺼짐."""
+        on = source in ("playlist", "library")
+        where = {"playlist": "재생목록", "library": "라이브러리 목록"}.get(source, "")
+        for b, word, key in ((self.btn_prev, "이전", "P"), (self.btn_next, "다음", "N")):
+            b.setEnabled(on)
+            b.setToolTip(f"{where}의 {word} 영상 ({key})" if on else
+                         f"{word} 영상 — 재생목록이나 라이브러리에서 재생할 때 쓸 수 있어요")
 
     REPEAT_TIPS = {
         "off": "반복 안 함 — 누르면 '한 곡 반복' (⌘T)",
