@@ -4,13 +4,17 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QUrl, Qt
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QPixmap
 from PySide6.QtWidgets import (QCheckBox, QDialog, QHBoxLayout, QLabel, QListWidget, QPushButton, QSplitter,
                                QTextBrowser, QVBoxLayout)
 
 from classplayer.bootstrap import bundled_dir
 
 NOTICE_VERSION = 1      # 안내 내용을 크게 바꾸면 올린다 → 모두에게 한 번 더 보여 줌
+CREATOR = "다있쌤 로디"
+DOWNLOAD_SITE = "https://hwansang.kr/tools"
+SOURCE_URL = "https://github.com/janghwansangai/classplayer"
+APP_LICENSE = "GNU GPL v3.0 또는 그 이후 버전 (GPL-3.0-or-later)"
 
 NOTICE_HTML = """
 <h2 style="margin-top:0">ClassPlayer 이용 안내</h2>
@@ -85,6 +89,58 @@ class NoticeDialog(QDialog):
             btns.addWidget(b_lic)
             btns.addStretch(1)
             btns.addWidget(b_close)
+        lay.addLayout(btns)
+
+
+class AboutDialog(QDialog):
+    """도움말 › ClassPlayer 정보: 버전, 제작자, 다운로드 사이트, 라이선스."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        from classplayer import __version__
+        self.setWindowTitle("ClassPlayer 정보")
+        self.setMinimumWidth(460)
+        icon = QLabel()
+        pm = QPixmap(str((bundled_dir() or Path(__file__).resolve().parent.parent) / "assets" / "icon.png"))
+        if not pm.isNull():
+            icon.setPixmap(pm.scaled(88, 88, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title = QLabel(f"<div style='font-size:22px;font-weight:800'>ClassPlayer</div>"
+                       f"<div style='color:#8b8e99'>버전 {__version__} · 수업용 영상 플레이어</div>")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        info = QLabel(
+            "<table cellspacing='0' cellpadding='5'>"
+            f"<tr><td style='color:#8b8e99'>제작자</td><td><b>{CREATOR}</b></td></tr>"
+            f"<tr><td style='color:#8b8e99'>다운로드 사이트</td><td><a href='{DOWNLOAD_SITE}'>{DOWNLOAD_SITE}</a></td></tr>"
+            f"<tr><td style='color:#8b8e99'>라이선스</td><td>{APP_LICENSE}</td></tr>"
+            f"<tr><td style='color:#8b8e99'>소스 코드</td><td><a href='{SOURCE_URL}'>{SOURCE_URL.replace('https://', '')}</a></td></tr>"
+            "</table>")
+        info.setOpenExternalLinks(True)
+        info.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        info.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        note = QLabel("이 프로그램은 자유 소프트웨어입니다. GNU GPL 3판(또는 그 이후 판)에 따라 다시 배포하거나 고칠 수 있으며, "
+                      "어떠한 보증도 하지 않습니다. 함께 담긴 오픈소스 구성 요소는 각자의 라이선스를 따릅니다.")
+        note.setWordWrap(True)
+        note.setObjectName("muted")
+        b_site = QPushButton("다운로드 사이트 열기")
+        b_site.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(DOWNLOAD_SITE)))
+        b_lic = QPushButton("오픈소스 라이선스…")
+        b_lic.clicked.connect(lambda: LicenseDialog(self).exec())
+        b_close = QPushButton("닫기")
+        b_close.setObjectName("primary")
+        b_close.clicked.connect(self.accept)
+        btns = QHBoxLayout()
+        btns.addWidget(b_site)
+        btns.addWidget(b_lic)
+        btns.addStretch(1)
+        btns.addWidget(b_close)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(24, 22, 24, 18)
+        lay.setSpacing(12)
+        lay.addWidget(icon)
+        lay.addWidget(title)
+        lay.addWidget(info)
+        lay.addWidget(note)
         lay.addLayout(btns)
 
 

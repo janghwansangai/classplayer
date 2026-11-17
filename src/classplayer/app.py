@@ -26,7 +26,7 @@ from classplayer.ui import icons
 from classplayer.library.autodownload import (LIKED_URL, WATCH_LATER_URL, AutoDownloader, AutoDownloadStore, Source,
                                               is_playlist_url, playlist_url)
 from classplayer.ui.autodownload_panel import AutoDownloadPanel, LikedDialog
-from classplayer.ui.legal import NOTICE_VERSION, LicenseDialog, NoticeDialog
+from classplayer.ui.legal import DOWNLOAD_SITE, NOTICE_VERSION, AboutDialog, LicenseDialog, NoticeDialog
 from classplayer.ui.music_view import MusicView
 from classplayer.ui.stitch_dialog import StitchDialog
 from classplayer.ui.playlist_panel import PlaylistPanel
@@ -1388,6 +1388,9 @@ class MainWindow(QMainWindow):
         m_help.addSeparator()
         act(m_help, "이용 안내 (저작권·개인정보)…", lambda: NoticeDialog(self).exec())
         act(m_help, "오픈소스 라이선스…", lambda: LicenseDialog(self).exec())
+        m_help.addSeparator()
+        act(m_help, "다운로드 사이트 (hwansang.kr/tools)", lambda: QDesktopServices.openUrl(QUrl(DOWNLOAD_SITE)))
+        act(m_help, "ClassPlayer 정보 (제작자: 다있쌤 로디)…", lambda: AboutDialog(self).exec())
 
     # ------------------------------------------------------------------ 열기/재생
     def play_from_url_bar(self) -> None:

@@ -1,8 +1,11 @@
 [project]
 name = "classplayer"
-version = "0.5.8"
+version = "0.5.9"
 description = "수업용 영상 플레이어: 모든 코덱, 360도, 유튜브 광고 없이 재생/다운로드"
 requires-python = ">=3.12,<3.14"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "다있쌤 로디" }]
 dependencies = [
     "PySide6>=6.8",
     "python-mpv>=1.0.7",

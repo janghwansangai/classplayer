@@ -5,6 +5,7 @@ ClassPlayer 는 아래 오픈소스 소프트웨어를 함께 담아 배포합�
 
 ## 소스 코드
 
+- ClassPlayer 자체: GNU GPL v3.0 또는 그 이후 버전(GPL-3.0-or-later, 전문 GPL-3.0.txt). 제작자 다있쌤 로디.
 - ClassPlayer 자체 소스: https://github.com/janghwansangai/classplayer
 - GPL·LGPL 구성 요소의 소스 코드는 아래 '소스' 주소에서 받을 수 있습니다. 이 앱에 넣은 바로 그 버전의 소스가
   필요하면 위 ClassPlayer 저장소의 이슈로 요청해 주세요.

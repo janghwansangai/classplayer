@@ -123,6 +123,7 @@ def main() -> int:
         "",
         "## 소스 코드",
         "",
+        "- ClassPlayer 자체: GNU GPL v3.0 또는 그 이후 버전(GPL-3.0-or-later, 전문 GPL-3.0.txt). 제작자 다있쌤 로디.",
         "- ClassPlayer 자체 소스: https://github.com/janghwansangai/classplayer",
         "- GPL·LGPL 구성 요소의 소스 코드는 아래 '소스' 주소에서 받을 수 있습니다. 이 앱에 넣은 바로 그 버전의 소스가",
         "  필요하면 위 ClassPlayer 저장소의 이슈로 요청해 주세요.",
@@ -190,6 +191,8 @@ def write_site(rows) -> None:
   <a href="https://github.com/janghwansangai/classplayer/tree/main/src/classplayer/assets/licenses">GitHub</a>에 있습니다.</p>
   <h2>소스 코드</h2>
   <ul>
+    <li>ClassPlayer 자체: GNU GPL v3.0 또는 그 이후 버전(GPL-3.0-or-later). 제작자 다있쌤 로디 ·
+      다운로드 <a href="https://hwansang.kr/tools">hwansang.kr/tools</a></li>
     <li>ClassPlayer 자체 소스: <a href="https://github.com/janghwansangai/classplayer">github.com/janghwansangai/classplayer</a></li>
     <li>GPL·LGPL 구성 요소의 소스 코드는 아래 주소에서 받을 수 있습니다. 앱에 넣은 바로 그 버전의 소스가 필요하면 ClassPlayer 저장소의 이슈로 요청해 주세요.</li>
     <li>Qt(LGPL-3.0)는 동적 라이브러리로 들어 있어, 같은 버전의 다른 Qt 라이브러리로 바꿔 쓸 수 있습니다.</li>
