@@ -284,3 +284,13 @@ def test_update_apply(tmp_path):
     assert not ua.apply(0, inst, inst, wait_s=0, launch=False)          # 같은 폴더면 하지 않음
     env = ua.clean_env()
     assert env["PYINSTALLER_RESET_ENVIRONMENT"] == "1" and not any(k.startswith("_PYI_") for k in env)
+
+
+def test_shortcut_text_per_os(monkeypatch):
+    """툴팁·도움말의 단축키 표기: 맥은 ⌘·⇧, 윈도우는 Ctrl+·Shift+."""
+    from classplayer import bootstrap
+    s = "검색 (⌘⇧F) · 열기 (⌘O) · 이음새 (⇧⌘3) · 반복 (⌘T)"
+    monkeypatch.setattr(bootstrap.sys, "platform", "win32")
+    assert bootstrap.keys(s) == "검색 (Ctrl+Shift+F) · 열기 (Ctrl+O) · 이음새 (Ctrl+Shift+3) · 반복 (Ctrl+T)"
+    monkeypatch.setattr(bootstrap.sys, "platform", "darwin")
+    assert bootstrap.keys(s) == s

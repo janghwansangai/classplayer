@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>라이브러리 폴더 버튼 시안</title>
+<style>
+  :root { --bg:#141518; --panel:#17181c; --field:#101114; --raised:#26272e; --line:#2a2b31; --line2:#3a3b44;
+          --text:#e7e8ec; --muted:#8b8e99; --amber:#f59e0b; --amber2:#fbbf24; --dim:#3b2f12; --red:#f87171; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:#0e0f12; color:var(--text); font-family:-apple-system,"Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif; font-size:14px; line-height:1.5; }
+  .page { max-width:1200px; margin:0 auto; padding:28px 16px 48px; }
+  h1 { font-size:24px; margin:0 0 6px; }
+  .lead { color:var(--muted); margin:0 0 22px; }
+  .cols { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(340px,100%),1fr)); gap:22px; align-items:start; }
+  .col { min-width:0; }
+  .col h2 { font-size:18px; margin:0 0 4px; display:flex; align-items:center; gap:8px; }
+  .tag { font-size:12px; font-weight:700; padding:2px 8px; border-radius:999px; background:var(--raised); color:var(--muted); }
+  .tag.a { background:var(--dim); color:var(--amber2); }
+  .col .what { color:var(--muted); margin:0 0 12px; font-size:13.5px; }
+  /* 라이브러리 옆 창 흉내 */
+  .dock { width:340px; max-width:100%; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:10px 10px 8px; position:relative; }
+  .dock .cap { color:var(--muted); font-size:12.5px; margin:0 0 8px 4px; }
+  .row { display:flex; gap:6px; align-items:center; }
+  .combo { flex:1; height:32px; border:1px solid var(--line2); background:var(--field); border-radius:8px; display:flex; align-items:center; padding:0 10px; gap:6px; min-width:0; }
+  .combo .t { flex:1; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  .ib { width:32px; height:32px; border-radius:8px; background:var(--raised); display:grid; place-items:center; color:#d9dbe3; flex:none; font-size:15px; }
+  .tb { height:32px; border-radius:8px; background:var(--raised); display:inline-flex; align-items:center; gap:6px; padding:0 10px; white-space:nowrap; font-weight:600; flex:none; }
+  .tb.amber { background:transparent; border:1px solid var(--amber); color:var(--amber2); }
+  .search { height:32px; border:1px solid var(--line2); background:var(--field); border-radius:8px; margin:8px 0; padding:0 10px; display:flex; align-items:center; color:#6b6e7a; }
+  .chips { display:flex; gap:6px; margin-bottom:8px; flex-wrap:wrap; }
+  .chip { padding:3px 10px; border-radius:999px; background:var(--raised); font-size:12.5px; color:var(--muted); }
+  .chip.on { background:var(--dim); color:var(--amber2); }
+  .item { display:flex; gap:8px; align-items:center; padding:5px 2px; }
+  .thumb { width:64px; height:38px; border-radius:6px; background:linear-gradient(135deg,#2c3e6b,#17213a); flex:none; }
+  .thumb.m { background:linear-gradient(135deg,#3b2f12,#1b1206); }
+  .item .n { font-size:13px; } .item .s { font-size:11.5px; color:var(--muted); }
+  .hdr { color:var(--amber2); font-weight:700; font-size:12.5px; padding:6px 4px 2px; background:#1f2026; border-radius:6px; margin:4px 0; }
+  .muted { color:var(--muted); }
+  .q { position:relative; }
+  .q::after { content:"?"; position:absolute; right:-6px; top:-6px; width:16px; height:16px; border-radius:50%; background:var(--red); color:#1b1206; font-size:11px; font-weight:800; display:grid; place-items:center; }
+  /* 시안 A: 폴더 목록 펼침 */
+  .ftitle { display:flex; align-items:center; justify-content:space-between; margin:0 2px 6px; }
+  .ftitle b { font-size:13.5px; }
+  .frow { display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:8px; border:1px solid transparent; }
+  .frow + .frow { margin-top:2px; }
+  .frow.sel { background:var(--dim); border-color:#5a4512; }
+  .frow .ico { width:26px; height:26px; border-radius:7px; background:var(--raised); display:grid; place-items:center; flex:none; font-size:13px; }
+  .frow .body { flex:1; min-width:0; }
+  .frow .nm { font-weight:600; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .frow .pt { font-size:11px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .act { display:flex; gap:4px; flex:none; }
+  .mini { height:24px; padding:0 7px; border-radius:6px; background:var(--raised); font-size:11.5px; display:inline-flex; align-items:center; gap:3px; color:#d9dbe3; }
+  .mini.x { color:var(--red); }
+  .sep { height:1px; background:var(--line); margin:8px 0; }
+  /* 시안 B: 드롭다운 + 글자 버튼 */
+  .path { display:flex; align-items:center; gap:6px; margin-top:6px; padding:5px 8px; border-radius:8px; background:var(--field); border:1px dashed var(--line2); font-size:12px; }
+  .path .p { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--muted); }
+  .menu { position:absolute; left:10px; top:48px; width:318px; background:#1d1e24; border:1px solid var(--line2); border-radius:10px; box-shadow:0 18px 40px rgba(0,0,0,.55); padding:6px; z-index:3; }
+  .mi { display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:6px; font-size:13px; }
+  .mi.on { background:#2c2d35; }
+  .mi .r { margin-left:auto; color:var(--muted); font-size:12px; }
+  .mi .sub { color:var(--muted); font-size:11px; display:block; }
+  .msep { height:1px; background:var(--line); margin:5px 2px; }
+  .submenu { position:absolute; left:150px; top:100px; width:190px; background:#1d1e24; border:1px solid var(--line2); border-radius:10px; box-shadow:0 18px 40px rgba(0,0,0,.55); padding:6px; z-index:4; }
+  .ghost { opacity:.35; }
+  /* 설명 */
+  ol.notes { margin:14px 0 0; padding-left:20px; color:#c9cbd3; font-size:13.5px; }
+  ol.notes li { margin:4px 0; }
+  ol.notes b { color:var(--text); }
+  .pc { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:12px; font-size:13px; }
+  .pc div { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+  .pc h4 { margin:0 0 4px; font-size:13px; }
+  .pc ul { margin:0; padding-left:16px; color:var(--muted); }
+  .num { display:inline-grid; place-items:center; width:18px; height:18px; border-radius:50%; background:var(--amber); color:#1b1206; font-size:11px; font-weight:800; margin-right:4px; vertical-align:1px; }
+  .state { color:var(--muted); font-size:12.5px; margin:14px 0 6px; }
+  @media (max-width:420px) { .dock { width:100%; } .menu { width:calc(100% - 20px); } .submenu { left:auto; right:6px; } .pc { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>라이브러리 폴더 버튼 시안</h1>
+  <p class="lead">지금은 [+] [−] [⟳] [📁] 아이콘만 있어서, 무엇을 넣고 빼는지·어느 폴더가 열리는지 알 수 없습니다. 두 가지 방향을 비교해 보세요. 아래 목록·검색·칩은 세 화면이 같습니다.</p>
+
+  <div class="cols">
+    <!-- 현재 -->
+    <div class="col">
+      <h2>지금 <span class="tag">비교용</span></h2>
+      <p class="what">아이콘 4개가 무슨 일을 하는지 눌러 보기 전에는 모릅니다.</p>
+      <div class="dock">
+        <div class="cap">라이브러리</div>
+        <div class="row">
+          <div class="combo"><span class="t">모든 폴더 (2개)</span><span class="muted">▾</span></div>
+          <div class="ib q">＋</div><div class="ib q">－</div><div class="ib q">⟳</div><div class="ib q">🗀</div>
+        </div>
+        <div class="search">🔍&nbsp; 영상 검색…</div>
+        <div class="chips"><span class="chip on">전체</span><span class="chip">360°</span><span class="chip">미리 받기</span><span class="chip">녹화·녹음</span></div>
+        <div class="hdr">▾ 수업 영상 · 3개</div>
+        <div class="item"><div class="thumb"></div><div><div class="n">빅 벅 버니</div><div class="s">수업 영상 · 173MB</div></div></div>
+        <div class="item"><div class="thumb"></div><div><div class="n">태양계 360도 여행</div><div class="s">360° 영상 · 85MB</div></div></div>
+        <div class="hdr">▾ 음악 · 1개</div>
+        <div class="item"><div class="thumb m"></div><div><div class="n">봄날의 산책</div><div class="s">소리 · 0.5MB</div></div></div>
+      </div>
+      <ol class="notes">
+        <li><b>＋</b> 무엇을 더하는지(파일? 폴더?) 알 수 없음</li>
+        <li><b>－</b> 어떤 폴더가 빠지는지 미리 보이지 않음</li>
+        <li><b>🗀</b> 어느 폴더가 열리는지(저장 폴더) 알 수 없음</li>
+      </ol>
+    </div>
+
+    <!-- 시안 A -->
+    <div class="col">
+      <h2>시안 A <span class="tag a">폴더 목록을 펼쳐 보여 주기</span></h2>
+      <p class="what">넣은 폴더를 한 줄씩 보여 주고, 각 줄 옆에 그 폴더에 대한 버튼을 둡니다.</p>
+      <div class="dock">
+        <div class="cap">라이브러리</div>
+        <div class="ftitle"><b>▾ 내 폴더 <span class="muted" style="font-weight:400">3</span></b><span class="tb amber" style="height:28px;font-size:12.5px">＋ 폴더 추가</span></div>
+        <div class="frow sel"><div class="ico">▦</div><div class="body"><div class="nm">모든 폴더 보기</div><div class="pt">영상·음악 21개</div></div></div>
+        <div class="frow"><div class="ico">🗀</div><div class="body"><div class="nm">수업 영상 · 12개</div><div class="pt">~/Desktop/수업 자료/수업 영상</div></div>
+          <div class="act"><span class="mini">열기</span><span class="mini x">빼기</span></div></div>
+        <div class="frow"><div class="ico">🗀</div><div class="body"><div class="nm">음악 · 4개</div><div class="pt">~/Music/수업 음악</div></div>
+          <div class="act"><span class="mini">열기</span><span class="mini x">빼기</span></div></div>
+        <div class="frow"><div class="ico" style="background:var(--dim);color:var(--amber2)">⬇</div><div class="body"><div class="nm">저장 폴더 · 5개</div><div class="pt">미리 받기·녹화·녹음 · ~/Movies/ClassPlayer</div></div>
+          <div class="act"><span class="mini">열기</span><span class="mini">바꾸기</span></div></div>
+        <div class="sep"></div>
+        <div class="search" style="margin-top:0">🔍&nbsp; 영상 검색…</div>
+        <div class="chips"><span class="chip on">전체</span><span class="chip">360°</span><span class="chip">미리 받기</span><span class="chip">녹화·녹음</span></div>
+        <div class="hdr">▾ 수업 영상 · 12개</div>
+        <div class="item"><div class="thumb"></div><div><div class="n">빅 벅 버니</div><div class="s">수업 영상 · 173MB</div></div></div>
+      </div>
+      <ol class="notes">
+        <li><span class="num">1</span><b>＋ 폴더 추가</b>: 글자로 '폴더'를 넣는다고 적음. 고르는 창 제목도 "라이브러리에 보여 줄 폴더 고르기 (파일은 옮기지 않아요)"</li>
+        <li><span class="num">2</span>폴더마다 <b>이름·영상 수·경로</b>가 보이고, 그 줄 오른쪽 <b>열기</b>(탐색기/Finder)·<b>빼기</b>가 바로 그 폴더에 대한 버튼</li>
+        <li><span class="num">3</span><b>저장 폴더</b>(미리 받기·녹화·녹음이 저장되는 곳)를 따로 표시하고 경로를 보여 줌. 빼기 대신 <b>바꾸기</b></li>
+        <li><span class="num">4</span>줄을 누르면 그 폴더만 아래 목록에 보임 (지금의 드롭다운 역할). ⟳ 새로 고침은 폴더를 추가·빼면 자동이라 없앰</li>
+        <li><span class="num">5</span>'▾ 내 폴더'를 누르면 접혀서 한 줄로 줄어듦 (영상 목록을 넓게 보고 싶을 때)</li>
+      </ol>
+      <div class="pc"><div><h4>좋은 점</h4><ul><li>모든 버튼이 대상 폴더 바로 옆</li><li>경로가 늘 보여 헷갈림이 가장 적음</li></ul></div>
+        <div><h4>아쉬운 점</h4><ul><li>폴더가 많으면 위쪽이 길어짐(접기로 해결)</li></ul></div></div>
+    </div>
+
+    <!-- 시안 B -->
+    <div class="col">
+      <h2>시안 B <span class="tag a">드롭다운 + 글자 버튼 (지금 모양 유지)</span></h2>
+      <p class="what">지금처럼 한 줄로 두되, 아이콘 대신 글자 버튼과 경로 줄을 붙입니다.</p>
+      <div class="dock">
+        <div class="cap">라이브러리</div>
+        <div class="row">
+          <div class="combo"><span>🗀</span><span class="t">보는 폴더: 수업 영상</span><span class="muted">▾</span></div>
+          <span class="tb amber">＋ 폴더 추가</span>
+        </div>
+        <div class="path"><span>📍</span><span class="p">~/Desktop/수업 자료/수업 영상</span><span class="mini">열기</span></div>
+        <div class="search">🔍&nbsp; 영상 검색…</div>
+        <div class="chips"><span class="chip on">전체</span><span class="chip">360°</span><span class="chip">미리 받기</span><span class="chip">녹화·녹음</span></div>
+        <div class="hdr">▾ 수업 영상 · 12개</div>
+        <div class="item"><div class="thumb"></div><div><div class="n">빅 벅 버니</div><div class="s">수업 영상 · 173MB</div></div></div>
+        <div class="item"><div class="thumb"></div><div><div class="n">태양계 360도 여행</div><div class="s">360° 영상 · 85MB</div></div></div>
+      </div>
+
+      <div class="state">▼ '보는 폴더' 를 눌렀을 때</div>
+      <div class="dock" style="min-height:300px">
+        <div class="cap">라이브러리</div>
+        <div class="row ghost">
+          <div class="combo"><span>🗀</span><span class="t">보는 폴더: 수업 영상</span><span class="muted">▾</span></div>
+          <span class="tb amber">＋ 폴더 추가</span>
+        </div>
+        <div class="menu">
+          <div class="mi">▦ 모든 폴더 보기 <span class="r">21개</span></div>
+          <div class="msep"></div>
+          <div class="mi on">✓ 수업 영상 <span class="r">12개 ▸</span></div>
+          <div class="mi">&nbsp;&nbsp; 음악 <span class="r">4개 ▸</span></div>
+          <div class="msep"></div>
+          <div class="mi">⬇ 저장 폴더 열기<span class="r">~/Movies/ClassPlayer</span></div>
+          <div class="mi">⟳ 폴더 다시 훑기</div>
+        </div>
+        <div class="submenu">
+          <div class="mi">이 폴더만 보기</div>
+          <div class="mi">탐색기에서 열기</div>
+          <div class="msep"></div>
+          <div class="mi" style="color:var(--red)">라이브러리에서 빼기…</div>
+          <div class="mi" style="font-size:11px;color:var(--muted)">파일은 지우지 않아요</div>
+        </div>
+      </div>
+      <ol class="notes">
+        <li><span class="num">1</span><b>＋ 폴더 추가</b>: 아이콘 대신 글자. 고르는 창 제목도 "라이브러리에 보여 줄 폴더 고르기"</li>
+        <li><span class="num">2</span>드롭다운에 <b>'보는 폴더: 이름'</b>이라고 적어 지금 무엇을 보는지 분명히</li>
+        <li><span class="num">3</span>바로 아래 <b>경로 줄</b>: 고른 폴더의 실제 위치와 <b>열기</b>(탐색기/Finder). '모든 폴더'일 때는 "폴더 3개 · 저장 폴더 ~/Movies/ClassPlayer [열기]"</li>
+        <li><span class="num">4</span><b>빼기·열기·저장 폴더·새로 고침</b>은 드롭다운 안 폴더 이름 옆 ▸ 메뉴로 (어느 폴더에 대한 일인지 메뉴에 이름이 붙어 있음)</li>
+      </ol>
+      <div class="pc"><div><h4>좋은 점</h4><ul><li>지금 모양·높이를 거의 유지</li><li>영상 목록이 넓게 보임</li></ul></div>
+        <div><h4>아쉬운 점</h4><ul><li>빼기·열기가 한 번 더 눌러야 보임</li></ul></div></div>
+    </div>
+  </div>
+  <p class="lead" style="margin-top:26px">두 시안 모두: 마우스를 올리면 "이 폴더의 영상만 목록에 보여요. 파일을 옮기거나 지우지 않아요" 같은 안내가 뜨고, 맥에서는 '탐색기' 대신 'Finder'라고 적습니다.</p>
+</div>
+</body>
+</html>

@@ -33,6 +33,14 @@ _PATHS: dict[str, str] = {
     "minus": '<path d="M5 12h14"/>',
     "refresh": '<path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/>',
     "music": '<path d="M9 18V5l11-2v13"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/>',
+    "repeat": '<path d="M17 2l3 3-3 3"/><path d="M4 11V9a4 4 0 0 1 4-4h12"/><path d="M7 22l-3-3 3-3"/>'
+              '<path d="M20 13v2a4 4 0 0 1-4 4H4"/>',
+    "repeat1": '<path d="M17 2l3 3-3 3"/><path d="M4 11V9a4 4 0 0 1 4-4h12"/><path d="M7 22l-3-3 3-3"/>'
+               '<path d="M20 13v2a4 4 0 0 1-4 4H4"/><text x="12" y="14.6" font-size="7.5" font-weight="800" '
+               'text-anchor="middle" fill="C" stroke="none" font-family="Helvetica">1</text>',
+    "window": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/><path d="M6.5 6.5h.01M9 6.5h.01"/>',
+    "grid": '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/>'
+            '<rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>',
     "scissors": '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M8.1 7.9L20 20M8.1 16.1L20 4"/>',
 }
 

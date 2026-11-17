@@ -156,6 +156,7 @@ class ControlBar(QWidget):
     fullscreen_clicked = Signal()
     screenshot_clicked = Signal()
     record_clicked = Signal()
+    repeat_clicked = Signal()
     audio_only_toggled = Signal(bool)
     range_edited = Signal(float, float)        # 탐색바에서 정한 녹화 구간 (초)
     range_context = Signal(float, object)      # 오른쪽 클릭한 시각(초), 화면 좌표
@@ -228,6 +229,9 @@ class ControlBar(QWidget):
         self.speed.setToolTip("재생 속도 ([ / ])")
         self.speed.currentIndexChanged.connect(lambda i: self.speed_changed.emit(float(self.speed.itemData(i))))
 
+        self.btn_repeat = tool("repeat", "")
+        self.btn_repeat.clicked.connect(self.repeat_clicked)
+        self.set_repeat_mode("off")
         self.btn_subs = tool("subs", "자막 전환 (S) · 지금: 꺼짐", checkable=True)
         self.btn_subs.clicked.connect(self.subs_clicked)
         self.btn_shot = tool("camera", "현재 화면을 이미지로 저장")
@@ -257,7 +261,7 @@ class ControlBar(QWidget):
         lay.addWidget(self.vol)
         lay.addSpacing(6)
         lay.addWidget(self.speed)
-        for w in (self.btn_subs, self.btn_shot, self.btn_rec, self.btn_vr, self.btn_vr_reset, self.btn_audio,
+        for w in (self.btn_repeat, self.btn_subs, self.btn_shot, self.btn_rec, self.btn_vr, self.btn_vr_reset, self.btn_audio,
                   self.btn_full):
             lay.addWidget(w)
 
@@ -316,6 +320,19 @@ class ControlBar(QWidget):
         self.btn_rec.setChecked(on)
         self.btn_rec.blockSignals(False)
         self.btn_rec.setToolTip(text if on else "녹화·녹음: 전체 또는 구간을 파일로 저장 (Ctrl+R)")
+
+    REPEAT_TIPS = {
+        "off": "반복 안 함 — 누르면 '한 곡 반복' (⌘T)",
+        "one": "한 곡 반복 중: 지금 영상·음악을 끝나면 처음부터 다시 — 누르면 '목록 반복' (⌘T)",
+        "list": "목록 반복 중: 재생목록이 끝나면 처음부터 다시 — 누르면 '반복 안 함' (⌘T)",
+    }
+
+    def set_repeat_mode(self, mode: str) -> None:
+        """반복 버튼 모양: 안 함(회색) / 한 곡(앰버 '1') / 목록(앰버)."""
+        on = mode in ("one", "list")
+        self.btn_repeat.setIcon(icons.icon("repeat1" if mode == "one" else "repeat", AMBER_HOVER if on else ICON))
+        from classplayer.bootstrap import keys
+        self.btn_repeat.setToolTip(keys(self.REPEAT_TIPS.get(mode, "")))
 
     def set_video_tools_enabled(self, on: bool) -> None:
         """음악·소리만 재생일 때 화면 캡처·360도 버튼을 끈다."""

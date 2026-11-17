@@ -6,14 +6,16 @@ import json
 import os
 import re
 import subprocess
+import sys
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRectF, QSize, QStandardPaths, Qt, Signal
+from PySide6.QtCore import QFileSystemWatcher, QObject, QRectF, QSize, QStandardPaths, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QLinearGradient, QPainter, QPainterPath, QPixmap
-from PySide6.QtWidgets import (QButtonGroup, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-                               QListWidgetItem, QPushButton, QToolButton, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QButtonGroup, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+                               QListWidgetItem, QPushButton, QScrollArea, QToolButton, QVBoxLayout, QWidget)
 
 from classplayer.bootstrap import AUDIO_EXTENSIONS, MEDIA_EXTENSIONS, NO_WINDOW, is_cloud_placeholder
 from classplayer.ui import icons
@@ -250,10 +252,111 @@ class LibraryThumbs:
         return (str(jpg) if jpg.exists() else ""), dur, sph
 
 
+FOLDER_QSS = """
+#folderrow { border: 1px solid transparent; border-radius: 8px; }
+#folderrow:hover { background: #1f2026; }
+#folderrow[selected="true"] { background: #3b2f12; border-color: #5a4512; }
+#folderrow QLabel { background: transparent; }
+#folderico { background: #26272e; border-radius: 7px; color: #d9dbe3; }
+#folderico[save="true"] { background: #3b2f12; color: #fbbf24; }
+QPushButton#mini { min-height: 22px; max-height: 22px; padding: 0 8px; border-radius: 6px; background: #26272e;
+                   font-size: 11.5px; color: #d9dbe3; border: none; }
+QPushButton#mini:hover { background: #30313a; }
+QPushButton#mini[danger="true"] { color: #f87171; }
+QPushButton#outline { background: transparent; border: 1px solid #f59e0b; color: #fbbf24; border-radius: 8px;
+                      padding: 2px 10px; min-height: 24px; max-height: 26px; font-weight: 600; }
+QPushButton#outline:hover { background: #3b2f12; }
+QToolButton#foldhead { border: none; background: transparent; font-weight: 700; color: #e7e8ec; padding: 2px 0; }
+"""
+
+FILE_MANAGER = "Finder" if sys.platform == "darwin" else "탐색기"
+
+
+def short_path(path: str) -> str:
+    """홈 폴더는 ~ 로 줄여 보여 준다."""
+    home = os.path.expanduser("~")
+    return "~" + path[len(home):] if path.startswith(home) else path
+
+
+class _ElideLabel(QLabel):
+    """폭에 맞춰 가운데를 … 로 줄이는 한 줄 글 (긴 경로용)."""
+
+    def __init__(self, text: str = "", parent=None) -> None:
+        super().__init__(parent)
+        self._full = text
+        self.setMinimumWidth(10)
+        self.setText(text)
+
+    def set_full(self, text: str) -> None:
+        self._full = text
+        self._update()
+
+    def resizeEvent(self, e) -> None:  # noqa: N802
+        super().resizeEvent(e)
+        self._update()
+
+    def _update(self) -> None:
+        super().setText(self.fontMetrics().elidedText(self._full, Qt.TextElideMode.ElideMiddle, max(10, self.width())))
+
+
+class _FolderRow(QFrame):
+    """'내 폴더' 한 줄: 아이콘 · 이름·영상 수 · 경로 · (열기 / 빼기 또는 바꾸기)."""
+
+    clicked = Signal(str)
+
+    def __init__(self, root: str, title: str, sub: str, icon: str, tip: str, actions: list, save: bool = False,
+                 parent=None) -> None:
+        super().__init__(parent)
+        self.root = root
+        self.setObjectName("folderrow")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip(tip)
+        ico = QLabel()
+        ico.setObjectName("folderico")
+        ico.setProperty("save", save)
+        ico.setFixedSize(26, 26)
+        ico.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ico.setPixmap(icons.pixmap(icon, "#fbbf24" if save else "#d9dbe3", 15))
+        name = QLabel(title)
+        name.setStyleSheet("font-weight:600; font-size:13px;")
+        path = _ElideLabel(sub)
+        path.setStyleSheet("color:#8b8e99; font-size:11px;")
+        body = QVBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+        body.addWidget(name)
+        body.addWidget(path)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(8, 5, 6, 5)
+        row.setSpacing(8)
+        row.addWidget(ico)
+        row.addLayout(body, 1)
+        for text, tip_a, slot, danger in actions:
+            b = QPushButton(text)
+            b.setObjectName("mini")
+            b.setProperty("danger", danger)
+            b.setToolTip(tip_a)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            b.clicked.connect(slot)
+            row.addWidget(b)
+
+    def set_selected(self, on: bool) -> None:
+        self.setProperty("selected", on)
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def mousePressEvent(self, e) -> None:  # noqa: N802
+        if e.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self.root)
+        super().mousePressEvent(e)
+
+
 class LibraryPanel(QWidget):
     play_requested = Signal(str)
     folders_changed = Signal(list)
     open_saved_requested = Signal()
+    change_saved_requested = Signal()        # 저장 폴더 '바꾸기'
 
     FILTERS = (("all", "전체"), ("360", "360°"), ("saved", "미리 받기"), ("rec", "녹화·녹음"))
     FILTER_TIPS = {"all": "라이브러리 폴더와 저장 폴더의 영상·소리 전부",
@@ -282,6 +385,7 @@ class LibraryPanel(QWidget):
         self._notifier.thumb.connect(self._on_thumb)
 
         self.search = QLineEdit()
+        self.search.setToolTip("파일 이름이나 폴더 이름으로 찾기 (⌘⇧F) · 띄어 쓴 낱말은 모두 들어간 것만")
         self.search.setPlaceholderText("영상 검색…")
         self.search.setClearButtonEnabled(True)
         self.search.addAction(QIcon(icons.pixmap("search", "#6b6e7a", 16)), QLineEdit.ActionPosition.LeadingPosition)
@@ -306,6 +410,7 @@ class LibraryPanel(QWidget):
         chips.addStretch(1)
 
         self.list = QListWidget()
+        self.list.setToolTip("두 번 누르면 재생 · 오른쪽 클릭: 재생목록에 추가·폴더에서 보기 · 폴더 제목 줄을 누르면 접기·펼치기")
         self.list.setIconSize(QSize(THUMB_W, THUMB_H))
         self.list.setSpacing(1)
         self.list.setUniformItemSizes(False)     # 폴더 제목 줄은 높이가 다르다
@@ -313,40 +418,66 @@ class LibraryPanel(QWidget):
         self.list.itemActivated.connect(self._on_activated)
         self.list.itemDoubleClicked.connect(self._on_activated)
 
-        self.folder_combo = QComboBox()
-        self.folder_combo.setToolTip("보여 줄 폴더 고르기")
-        self.folder_combo.currentIndexChanged.connect(self._on_folder_combo)
-
-        def tbtn(name: str, tip: str, slot) -> QToolButton:
-            b = QToolButton()
-            b.setIcon(QIcon(icons.pixmap(name, "#d9dbe3", 16)))
-            b.setToolTip(tip)
-            b.clicked.connect(slot)
-            return b
-
-        self.btn_add = tbtn("plus", "폴더 추가", self.add_folder_dialog)
-        self.btn_remove = tbtn("minus", "라이브러리에서 폴더 빼기 (파일은 지우지 않음)", self._remove_folder_menu)
-        self.btn_refresh = tbtn("refresh", "다시 훑기", self.rescan)
-        self.btn_open_saved = tbtn("folder", "저장 폴더 열기 (녹화·녹음·미리 받기)", lambda: self.open_saved_requested.emit())
+        # ---- 시안 A: '내 폴더' — 넣은 폴더를 한 줄씩, 각 줄 옆에 그 폴더에 대한 버튼 (2026-11-17 사용자 선택)
+        self._folders_open = True
+        self.fold_btn = QToolButton()
+        self.fold_btn.setObjectName("foldhead")
+        self.fold_btn.setToolTip("내 폴더 목록 접기·펼치기 (영상 목록을 넓게 보고 싶을 때 접으세요)")
+        self.fold_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.fold_btn.clicked.connect(self._toggle_folders)
+        self.btn_add = QPushButton("＋ 폴더 추가")
+        self.btn_add.setObjectName("outline")
+        self.btn_add.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_add.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_add.setToolTip("컴퓨터의 폴더를 골라 그 안의 영상·음악을 라이브러리에 보여 줍니다 "
+                                "(하위 폴더 포함 · 파일을 옮기거나 복사하지 않아요)")
+        self.btn_add.clicked.connect(self.add_folder_dialog)
+        head = QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        head.addWidget(self.fold_btn)
+        head.addStretch(1)
+        head.addWidget(self.btn_add)
+        self.rows_box = QWidget()
+        self.rows_lay = QVBoxLayout(self.rows_box)
+        self.rows_lay.setContentsMargins(0, 0, 0, 0)
+        self.rows_lay.setSpacing(2)
+        self.rows_scroll = QScrollArea()
+        self.rows_scroll.setWidgetResizable(True)
+        self.rows_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.rows_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.rows_scroll.setWidget(self.rows_box)
+        self._rows: list[_FolderRow] = []
+        folder_area = QWidget()
+        folder_area.setStyleSheet(FOLDER_QSS)
+        fa = QVBoxLayout(folder_area)
+        fa.setContentsMargins(0, 0, 0, 0)
+        fa.setSpacing(4)
+        fa.addLayout(head)
+        fa.addWidget(self.rows_scroll)
+        sep = QFrame()
+        sep.setFixedHeight(1)
+        sep.setStyleSheet("background:#2a2b31;")
         self.lbl_count = QLabel("")
         self.lbl_count.setObjectName("muted")
 
-        top = QHBoxLayout()
-        top.setSpacing(6)
-        top.addWidget(self.folder_combo, 1)
-        top.addWidget(self.btn_add)
-        top.addWidget(self.btn_remove)
-        top.addWidget(self.btn_refresh)
-        top.addWidget(self.btn_open_saved)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(10, 4, 10, 8)
         lay.setSpacing(8)
-        lay.addLayout(top)
+        lay.addWidget(folder_area)
+        lay.addWidget(sep)
         lay.addWidget(self.search)
         lay.addLayout(chips)
         lay.addWidget(self.list, 1)
         lay.addWidget(self.lbl_count)
-        self._refresh_combo()
+        # 새로 고침 버튼 대신: 폴더 안 파일이 바뀌면(맨 위 단계) 잠시 뒤 다시 훑고, 앱으로 돌아올 때도 다시 훑는다
+        self._last_scan = 0.0
+        self._watcher = QFileSystemWatcher(self)
+        self._watcher.directoryChanged.connect(lambda _p: self._rescan_timer.start())
+        self._rescan_timer = QTimer(self)
+        self._rescan_timer.setSingleShot(True)
+        self._rescan_timer.setInterval(1500)
+        self._rescan_timer.timeout.connect(self.rescan)
+        self._refresh_folders()
         self.rescan()
 
     # ------------------------------------------------------------------
@@ -356,6 +487,7 @@ class LibraryPanel(QWidget):
 
     def set_extra_folders(self, extra: list[str]) -> None:
         self._extra = list(extra)
+        self._refresh_folders()
         self.rescan()
 
     def set_filter(self, key: str) -> None:
@@ -364,57 +496,86 @@ class LibraryPanel(QWidget):
             self.chips[key].setChecked(True)
         self._apply_filter()
 
-    def _refresh_combo(self) -> None:
+    def _refresh_folders(self) -> None:
+        """'내 폴더' 줄들을 다시 만든다 (모든 폴더 보기 · 넣은 폴더들 · 저장 폴더)."""
         counts: dict[str, int] = {}
         for e in self._entries:
             counts[e.root] = counts.get(e.root, 0) + 1
-        self.folder_combo.blockSignals(True)
-        self.folder_combo.clear()
-        if not self._folders:
-            self.folder_combo.addItem("폴더를 추가하세요 (+)", "")
-        else:
-            self.folder_combo.addItem(f"모든 폴더 ({len(self._folders)}개)", "")
-            for f in self._folders:
-                n = counts.get(f)
-                self.folder_combo.addItem(f"{Path(f).name or f}" + (f" · {n}개" if n is not None else ""), f)
-        idx = self.folder_combo.findData(self._folder_filter)
-        self.folder_combo.setCurrentIndex(max(0, idx))
-        if idx < 0:
+        if self._folder_filter and self._folder_filter not in self._folders and self._folder_filter not in self._extra:
             self._folder_filter = ""
-        self.folder_combo.blockSignals(False)
-        self.btn_remove.setEnabled(bool(self._folders))
+        while self.rows_lay.count():
+            it = self.rows_lay.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+        self._rows = []
 
-    def _on_folder_combo(self, _i: int) -> None:
-        self._folder_filter = str(self.folder_combo.currentData() or "")
+        def add(row: _FolderRow) -> None:
+            row.clicked.connect(self._select_folder)
+            row.set_selected(row.root == self._folder_filter)
+            self.rows_lay.addWidget(row)
+            self._rows.append(row)
+
+        def cnt(root: str) -> str:
+            return f" · {counts[root]}개" if root in counts else ""
+
+        total = len(self._entries)
+        add(_FolderRow("", "모든 폴더 보기", f"영상·음악 {total}개" if self._entries else "폴더의 영상·음악을 모두 보기",
+                       "grid", "아래 목록에 모든 폴더의 영상·음악을 함께 보여 줍니다", []))
+        for f in self._folders:
+            add(_FolderRow(
+                f, f"{Path(f).name or f}{cnt(f)}", short_path(f), "folder",
+                f"{f}\n누르면 이 폴더의 영상만 아래에 보여요 (하위 폴더 포함)",
+                [("열기", f"{FILE_MANAGER}에서 이 폴더 열기", lambda _c=False, r=f: self._open_dir(r), False),
+                 ("빼기", "라이브러리 목록에서 이 폴더 빼기 (컴퓨터의 파일은 지우지 않아요)",
+                  lambda _c=False, r=f: self.remove_folder(r), True)]))
+        if not self._folders:
+            hint = QLabel("＋ 폴더 추가로 수업 자료 폴더를 넣으면 그 안의 영상·음악이 여기 정리돼요")
+            hint.setWordWrap(True)
+            hint.setStyleSheet("color:#8b8e99; font-size:12px; padding:4px 8px;")
+            self.rows_lay.addWidget(hint)
+        for d in dict.fromkeys(self._extra):
+            if d in self._folders:
+                continue
+            add(_FolderRow(
+                d, f"저장 폴더{cnt(d)}", "미리 받기·녹화·녹음 · " + short_path(d), "download",
+                f"{d}\n미리 받기·녹화·녹음한 파일이 저장되는 곳 · 누르면 저장한 것만 아래에 보여요",
+                [("열기", f"{FILE_MANAGER}에서 저장 폴더 열기", lambda _c=False: self.open_saved_requested.emit(), False),
+                 ("바꾸기", "미리 받기·녹화·녹음을 저장할 폴더 바꾸기", lambda _c=False: self.change_saved_requested.emit(),
+                  False)], save=True))
+        self.rows_lay.addStretch(1)
+        n = len(self._folders)
+        self.fold_btn.setText(f"{'▾' if self._folders_open else '▸'}  내 폴더  {n}")
+        self.rows_scroll.setVisible(self._folders_open)
+        rows_h = sum(r.sizeHint().height() + 2 for r in self._rows) + (40 if not self._folders else 0)
+        self.rows_scroll.setFixedHeight(min(rows_h + 4, 250))
+
+    def _toggle_folders(self) -> None:
+        self._folders_open = not self._folders_open
+        self._refresh_folders()
+
+    def _select_folder(self, root: str) -> None:
+        self._folder_filter = root
+        for r in self._rows:
+            r.set_selected(r.root == root)
         self._apply_filter()
 
+    @staticmethod
+    def _open_dir(path: str) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+
     def add_folder_dialog(self) -> None:
-        d = QFileDialog.getExistingDirectory(self, "라이브러리에 추가할 폴더")
+        d = QFileDialog.getExistingDirectory(self, "라이브러리에 보여 줄 폴더 고르기 (파일은 옮기지 않아요)")
         if d:
             self.add_folder(d)
 
     def add_folder(self, folder: str) -> None:
         if folder and folder not in self._folders:
             self._folders.append(folder)
-            self._refresh_combo()
+            self._refresh_folders()
             self.folders_changed.emit(self.folders)
             self.rescan()
-
-    def _remove_folder_menu(self) -> None:
-        """− 버튼: 고른 폴더가 있으면 그 폴더를, 아니면 메뉴에서 골라 뺀다."""
-        if self._folder_filter in self._folders:
-            self.remove_folder(self._folder_filter)
-            return
-        if len(self._folders) == 1:
-            self.remove_folder(self._folders[0])
-            return
-        from PySide6.QtGui import QCursor
-        from PySide6.QtWidgets import QMenu
-        m = QMenu(self)
-        acts = {m.addAction(f"‘{Path(f).name or f}’ 빼기"): f for f in self._folders}
-        a = m.exec(QCursor.pos())
-        if a is not None:
-            self.remove_folder(acts[a])
 
     def remove_folder(self, folder: str, confirm: bool = True) -> None:
         """라이브러리에서 폴더를 뺀다 (파일은 그대로)."""
@@ -432,7 +593,7 @@ class LibraryPanel(QWidget):
         self._collapsed.discard(folder)
         if self._folder_filter == folder:
             self._folder_filter = ""
-        self._refresh_combo()
+        self._refresh_folders()
         self.folders_changed.emit(self.folders)
         self.rescan()
 
@@ -453,9 +614,24 @@ class LibraryPanel(QWidget):
     def is_library_folder(self, root: str) -> bool:
         return root in self._folders
 
+    def maybe_rescan(self, min_gap: float = 20.0) -> None:
+        """앱으로 돌아왔을 때 등: 마지막으로 훑은 지 min_gap 초가 지났으면 다시 훑는다."""
+        if time.monotonic() - self._last_scan >= min_gap:
+            self.rescan()
+
+    def _watch(self, dirs: list[str]) -> None:
+        old = self._watcher.directories()
+        if old:
+            self._watcher.removePaths(old)
+        ok = [d for d in dirs if os.path.isdir(d)]
+        if ok:
+            self._watcher.addPaths(ok)
+
     def rescan(self) -> None:
         folders = list(dict.fromkeys(self._folders))
         saved = [d for d in dict.fromkeys(self._extra) if d not in folders]
+        self._last_scan = time.monotonic()
+        self._watch(folders + saved)
         self.lbl_count.setText("훑는 중...")
 
         def work() -> None:
@@ -469,7 +645,7 @@ class LibraryPanel(QWidget):
             c = self._thumbs.get(e.path)
             if c:
                 self._sph[e.path] = c[2]
-        self._refresh_combo()
+        self._refresh_folders()
         self._apply_filter()
 
     def _is_saved(self, e: Entry) -> bool:

@@ -58,6 +58,7 @@ class PlaylistPanel(QWidget):
         # ---- 위: 내 재생목록 (이름별로 만들고 관리)
         head1 = QLabel("<b>내 재생목록</b>")
         self.lists = QListWidget()
+        self.lists.setToolTip("내 재생목록 · 고르면 아래에 영상이 보임 · 두 번 누르면 처음부터 재생 · 오른쪽 클릭: 이름 바꾸기·복제·내보내기·유튜브 링크 모두 받기")
         self.lists.setObjectName("pllists")
         self.lists.setSpacing(1)
         self.lists.currentRowChanged.connect(lambda _r: self.refresh_items())
@@ -103,6 +104,7 @@ class PlaylistPanel(QWidget):
         self.title = QLabel("")
         self.title.setWordWrap(True)
         self.btn_play_all = QPushButton("▶  처음부터 재생")
+        self.btn_play_all.setToolTip("고른 재생목록의 첫 영상부터 차례로 재생합니다 (끝나면 다음 영상으로 · N/P 로 넘기기)")
         self.btn_play_all.setObjectName("primary")
         self.btn_play_all.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.btn_play_all.clicked.connect(self._play_all)
@@ -111,6 +113,7 @@ class PlaylistPanel(QWidget):
         head2.addWidget(self.btn_play_all)
 
         self.list = _DropList()
+        self.list.setToolTip("이 목록의 영상 · 두 번 누르면 그 영상부터 재생 · 파일이나 유튜브 링크를 끌어다 놓으면 추가 · 오른쪽 클릭: 위로·아래로·빼기")
         self.list.setIconSize(QSize(18, 18))
         self.list.setSpacing(1)
         self.list.itemActivated.connect(self._play_item)
@@ -140,7 +143,9 @@ class PlaylistPanel(QWidget):
             tools.addWidget(b)
 
         self.repeat = QCheckBox("목록 반복")
+        self.repeat.setToolTip("재생목록이 끝나면 처음부터 다시 (재생 막대의 반복 버튼·⌘T 와 같은 설정)")
         self.shuffle = QCheckBox("섞어서 재생")
+        self.shuffle.setToolTip("목록 순서를 섞어서 재생합니다")
         self.repeat.setChecked(store.repeat)
         self.shuffle.setChecked(store.shuffle)
         self.repeat.toggled.connect(lambda on: store.set_options(repeat=on))

@@ -115,6 +115,7 @@ class AutoDownloadPanel(QWidget):
 
         # ---- 가져올 곳
         self.sources = QListWidget()
+        self.sources.setToolTip("새 영상을 확인하는 곳(유튜브 재생목록·좋아요) · 오른쪽 클릭: 지금 확인·멈추기·빼기")
         self.sources.setObjectName("pllists")
         self.sources.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.sources.setTextElideMode(Qt.TextElideMode.ElideRight)
@@ -137,6 +138,7 @@ class AutoDownloadPanel(QWidget):
 
         # ---- 받을 목록
         self.queue = QListWidget()
+        self.queue.setToolTip("받을 목록 · 위에서부터 하나씩 받음 · 받은 영상은 두 번 눌러 재생 · 오른쪽 클릭: 다음 차례로·다시 받기·빼기")
         self.queue.setIconSize(QSize(14, 14))
         self.queue.setSpacing(1)
         self.queue.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -156,6 +158,7 @@ class AutoDownloadPanel(QWidget):
         q_btns.addWidget(chip("실패 다시", "실패한 영상을 다시 받기", lambda: store.retry()))
         q_btns.addWidget(chip("완료 지우기", "다 받은 항목을 목록에서 지우기 (파일은 그대로)", lambda: store.clear_done()))
         self.pause_streaming = QCheckBox("유튜브 재생 중에는 쉬기 (수업 화면이 끊기지 않게)")
+        self.pause_streaming.setToolTip("유튜브 영상을 보는 동안 받기를 멈춰 인터넷을 수업 화면에 양보합니다. 멈추거나 끝나면 이어서 받습니다")
         self.pause_streaming.toggled.connect(self.pause_streaming_toggled)
         hint = QLabel("유튜브 검색 결과를 오른쪽 클릭해 '받을 목록에 담기'를 누르면 여기에 쌓이고, 앱이 켜져 있는 동안 "
                       "하나씩 차례로 받습니다. 받은 영상은 라이브러리 '미리 받기'에 나옵니다.")

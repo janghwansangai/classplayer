@@ -20,6 +20,13 @@ MEDIA_EXTENSIONS = VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
 NO_WINDOW = 0x08000000 if sys.platform.startswith("win") else 0
 
 
+def keys(text: str) -> str:
+    """단축키 표기를 운영체제에 맞게: 맥은 ⌘·⇧ 그대로, 윈도우는 Ctrl+·Shift+."""
+    if sys.platform == "darwin":
+        return text
+    return text.replace("⌘⇧", "Ctrl+Shift+").replace("⇧⌘", "Ctrl+Shift+").replace("⌘", "Ctrl+").replace("⇧", "Shift+")
+
+
 def is_choco_shim(path: str) -> bool:
     """Chocolatey 가 PATH 에 두는 '심(shim)' 실행 파일인지 (진짜 프로그램을 가리키는 작은 대리 파일).
 

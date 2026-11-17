@@ -26,6 +26,7 @@ from classplayer.ui import icons
 from classplayer.library.autodownload import (LIKED_URL, WATCH_LATER_URL, AutoDownloader, AutoDownloadStore, Source,
                                               is_playlist_url, playlist_url)
 from classplayer.ui.autodownload_panel import AutoDownloadPanel, LikedDialog
+from classplayer.ui.edge_panel import EDGES, EdgePanel
 from classplayer.ui.legal import DOWNLOAD_SITE, NOTICE_VERSION, AboutDialog, LicenseDialog, NoticeDialog
 from classplayer.ui.music_view import MusicView
 from classplayer.ui.stitch_dialog import StitchDialog
@@ -59,6 +60,7 @@ S      자막 전환            A     오디오 트랙 전환
 ⌘O     파일 열기            ⌘D    다운로드
 ⌘R     녹화·녹음            I / O 녹화 구간 시작 / 끝을 지금 위치로
 ⌘B     소리만 재생            N / P 재생목록 다음 / 이전 영상
+⌘T     반복 바꾸기 (안 함 → 한 곡 반복 → 목록 반복)
 """
 
 
@@ -341,6 +343,7 @@ class DownloadPanel(QWidget):
         self.log.hide()      # 평소에는 접어 둔다 (오류처럼 보여 헷갈림)
         # 기록 상자 제목 줄: 무엇인지 알려 주고 접고 펼 수 있게
         self.log_toggle = QToolButton()
+        self.log_toggle.setToolTip("유튜브 내려받기 도구(yt-dlp)의 진행 기록을 펼치거나 접습니다. 문제가 있을 때만 보면 됩니다")
         self.log_toggle.setCheckable(True)
         self.log_toggle.setAutoRaise(True)
         self.log_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
@@ -514,10 +517,13 @@ class ClipboardBanner(QFrame):
         self.setObjectName("banner")
         self.label = QLabel("")
         b_play = QPushButton("바로 재생")
+        b_play.setToolTip("복사해 둔 유튜브 링크를 광고 없이 바로 재생합니다")
         b_play.setObjectName("primary")
         b_dl = QPushButton("다운로드")
+        b_dl.setToolTip("복사해 둔 링크의 영상을 수업 전에 파일로 받아 둡니다")
         b_close = QToolButton()
         b_close.setText("✕")
+        b_close.setToolTip("이 안내 닫기")
         b_close.setAutoRaise(True)
         for b in (b_play, b_dl, b_close):
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -566,6 +572,7 @@ class SearchPanel(QFrame):
         top.addWidget(b_close)
         from PySide6.QtWidgets import QListWidget
         self.list = QListWidget()
+        self.list.setToolTip("누르면 재생 · ↑↓로 고르고 Enter · 오른쪽 클릭: 미리 받기·재생목록에 추가·받을 목록에 담기·링크 복사")
         self.list.setObjectName("searchlist")
         self.list.setIconSize(QSize(128, 72))
         self.list.setSpacing(2)
@@ -979,6 +986,7 @@ class MainWindow(QMainWindow):
         self.url_edit = QLineEdit()
         self.url_edit.setObjectName("url")
         self.url_edit.setPlaceholderText("유튜브 링크를 붙여넣거나, 노래·영상 제목을 쓰고 Enter (유튜브 검색)")
+        self.url_edit.setToolTip("유튜브 링크를 붙여 넣으면 바로 재생 · 제목을 쓰고 Enter 면 유튜브 검색 · 파일 경로도 됩니다 (⌘L)")
         self.url_edit.setClearButtonEnabled(True)
         self.url_edit.addAction(QIcon(icons.pixmap("link", "#8b8e99", 16)), QLineEdit.ActionPosition.LeadingPosition)
         self.url_edit.returnPressed.connect(self.play_from_url_bar)
@@ -999,6 +1007,7 @@ class MainWindow(QMainWindow):
         btn_dl.setToolTip("수업 전에 유튜브 영상을 파일로 받아 두기 (⌘D)")
         btn_dl.clicked.connect(self.open_download_dialog)
         btn_open = topbtn("파일", "folder")
+        btn_open.setToolTip("컴퓨터에 있는 영상·음악 파일 열기 (⌘O)")
         btn_open.clicked.connect(self.open_file_dialog)
         urlrow = QHBoxLayout()
         urlrow.setContentsMargins(12, 6, 12, 6)   # 영상 자리를 넓히려고 위아래를 얇게
@@ -1084,6 +1093,7 @@ class MainWindow(QMainWindow):
                                     ffmpeg=self.ffmpeg, ffprobe=self.ffprobe)
         self.library.play_requested.connect(self.open_target)
         self.library.open_saved_requested.connect(self.open_save_folder)
+        self.library.change_saved_requested.connect(self._change_download_dir)
         self.library.folders_changed.connect(lambda f: setattr(self.settings, "library_folders", f))
         self.dock_library = QDockWidget("라이브러리", self)
         self.dock_library.setObjectName("dock_library")
@@ -1236,6 +1246,19 @@ class MainWindow(QMainWindow):
         p.volume_changed.connect(lambda v: c.set_volume(int(v)))
         p.mute_changed.connect(c.set_muted)
         p.media_title_changed.connect(self._on_title)
+        # 가장자리 조작판 (다른 프로그램을 쓰면서 화면 가장자리에서 조작)
+        self.edge = EdgePanel(self, edge=str(self.settings.q.value("mini/edge", "top")))
+        self.edge.enabled = self.settings.q.value("mini/enabled", True, type=bool)
+        p.pause_changed.connect(self.edge.set_paused)
+        p.position_changed.connect(self.edge.set_position)
+        p.duration_changed.connect(self.edge.set_duration)
+        p.volume_changed.connect(lambda v: self.edge.set_volume(int(v)))
+        p.mute_changed.connect(self.edge.set_muted)
+        self.playlists.position_changed.connect(lambda name, _i: self.edge.set_playlist_active(bool(name)))
+        self.edge.set_playlist_active(False)
+        self.edge.set_paused(True)
+        self.edge.set_volume(int(self.settings.volume))
+        QTimer.singleShot(1000, self.edge.start)
         p.file_loaded.connect(self._on_file_loaded)
         p.hwdec_changed.connect(self._on_hwdec)
         p.codec_changed.connect(self._on_codec)
@@ -1312,6 +1335,19 @@ class MainWindow(QMainWindow):
         act(m_play, "다음 영상 (재생목록, N)", self.playlist_next)
         act(m_play, "이전 영상 (재생목록, P)", self.playlist_prev)
         act(m_play, "재생목록 보기", self.show_playlist, "Ctrl+Shift+L")
+        # 반복: 안 함 / 한 곡 반복 / 목록 반복 (재생 막대 반복 버튼·재생목록 '목록 반복'과 같은 상태)
+        m_rep = m_play.addMenu("반복")
+        g_rep = QActionGroup(self)
+        self.a_repeat = {}
+        for mode, text in (("off", "반복 안 함"), ("one", "한 곡 반복"), ("list", "목록 반복 (재생목록)")):
+            a = QAction(text, self)
+            a.setCheckable(True)
+            a.triggered.connect(lambda _c=False, m=mode: self.set_repeat_mode(m))
+            g_rep.addAction(a)
+            m_rep.addAction(a)
+            self.a_repeat[mode] = a
+        m_rep.addSeparator()
+        act(m_rep, "반복 바꾸기", self.cycle_repeat, "Ctrl+T")
         act(m_file, "받을 목록에 담기 (입력칸의 유튜브 링크, 자동 받기)", self._queue_from_url_bar, "Ctrl+Shift+D")
         act(m_file, "자동 받기 보기", lambda: self._show_dock(self.dock_autodl))
         act(m_play, "지금 영상을 재생목록에 추가", lambda: self._add_to_playlist_menu(self._current, self.lbl_title.text() if is_url(self._current) else "") if self._current else self.notify("먼저 영상을 열어 주세요"))
@@ -1321,7 +1357,32 @@ class MainWindow(QMainWindow):
         act(m_play, "녹화 구간 끝 = 지금 위치 (O)", lambda: self._mark_now(False))
         act(m_play, "녹화·녹음 목록 보기", self.show_recordings)
 
+        # 반복 상태 되살리기 (한 곡 반복은 설정, 목록 반복은 재생목록 저장 파일에 있음)
+        self._repeat_mode = "off"
+        self.playlist_panel.repeat.toggled.connect(self._on_list_repeat_box)
+        one = self.settings.q.value("play/repeat_one", False, type=bool)
+        self.set_repeat_mode("one" if one else ("list" if self.playlists.repeat else "off"), announce=False)
+        self.controls.repeat_clicked.connect(self.cycle_repeat)
+        # 마우스를 올리면 나오는 안내: 옆 창 탭 설명 + 윈도우에서는 단축키를 Ctrl+ 로
+        self.tabifiedDockWidgetActivated.connect(lambda _d: QTimer.singleShot(0, self._apply_tab_tips))
+        QTimer.singleShot(800, self._apply_tab_tips)
+        QTimer.singleShot(0, self._localize_tooltips)
+
         m_view = mb.addMenu("보기")
+        self.a_edge = act(m_view, "가장자리 조작판 (다른 프로그램을 쓰면서 조작)", lambda on: self.set_edge_panel(enabled=on),
+                          checkable=True, checked=self.edge.enabled)
+        m_edge = m_view.addMenu("조작판 위치")
+        g_edge = QActionGroup(self)
+        self.a_edge_pos = {}
+        for key, label in EDGES:
+            a = QAction(label, self)
+            a.setCheckable(True)
+            a.setChecked(key == self.edge.edge)
+            a.triggered.connect(lambda _c=False, k=key: self.set_edge_panel(edge=k))
+            g_edge.addAction(a)
+            m_edge.addAction(a)
+            self.a_edge_pos[key] = a
+        m_view.addSeparator()
         act(m_view, "전체화면", self.toggle_fullscreen, "Ctrl+F")
         self.a_vr = act(m_view, "360도 모드", lambda on: self.set_vr(on), checkable=True)
         act(m_view, "창을 영상 크기에 맞추기 (검은 띠 없애기)", lambda: self.fit_window_to_video(user=True), "Ctrl+0")
@@ -1380,7 +1441,7 @@ class MainWindow(QMainWindow):
         act(m_set, "기본 영상 플레이어로 등록…", self.register_default_player)
 
         m_help = mb.addMenu("도움말")
-        act(m_help, "단축키", lambda: QMessageBox.information(self, "단축키", f"<pre>{HELP_TEXT}</pre>"))
+        act(m_help, "단축키", lambda: QMessageBox.information(self, "단축키", f"<pre>{bootstrap.keys(HELP_TEXT)}</pre>"))
         act(m_help, "환경 정보", self._show_env)
         m_help.addSeparator()
         act(m_help, "업데이트 확인…", lambda: self.check_update(silent=False))
@@ -1716,6 +1777,56 @@ class MainWindow(QMainWindow):
             self.open_target(item.target)
         finally:
             self._from_playlist = False
+
+    # ------------------------------------------------------------------ 반복
+    REPEAT_ORDER = ("off", "one", "list")
+    REPEAT_MSG = {"off": "반복 안 함", "one": "한 곡 반복: 지금 영상·음악을 끝나면 처음부터 다시 재생합니다",
+                  "list": "목록 반복: 재생목록이 끝나면 처음부터 다시 재생합니다"}
+
+    def cycle_repeat(self) -> None:
+        i = self.REPEAT_ORDER.index(self._repeat_mode) if self._repeat_mode in self.REPEAT_ORDER else 0
+        self.set_repeat_mode(self.REPEAT_ORDER[(i + 1) % len(self.REPEAT_ORDER)])
+
+    def set_repeat_mode(self, mode: str, announce: bool = True) -> None:
+        """한 곡 반복은 mpv loop-file(파일을 바꿔도 유지), 목록 반복은 재생목록 설정."""
+        self._repeat_mode = mode
+        try:
+            self.player.mpv["loop-file"] = "inf" if mode == "one" else "no"
+        except Exception:  # noqa: BLE001
+            pass
+        if self.playlists.repeat != (mode == "list"):
+            self.playlists.set_options(repeat=(mode == "list"))
+        self.settings.q.setValue("play/repeat_one", mode == "one")
+        self.controls.set_repeat_mode(mode)
+        if getattr(self, "edge", None):
+            self.edge.set_repeat(mode)
+        cb = self.playlist_panel.repeat
+        cb.blockSignals(True)
+        cb.setChecked(mode == "list")
+        cb.blockSignals(False)
+        if mode in self.a_repeat:
+            self.a_repeat[mode].setChecked(True)
+        if announce:
+            extra = " (재생목록을 재생할 때 적용)" if mode == "list" and not self.playlists.active else ""
+            self.notify(self.REPEAT_MSG[mode] + extra, 3500)
+
+    def set_edge_panel(self, enabled: bool | None = None, edge: str | None = None) -> None:
+        """가장자리 조작판 켜기·끄기와 위치(위·왼쪽·오른쪽)."""
+        if enabled is not None:
+            self.settings.q.setValue("mini/enabled", bool(enabled))
+            self.a_edge.setChecked(bool(enabled))
+            self.edge.set_enabled(bool(enabled))
+            self.notify("가장자리 조작판을 켰습니다 — 마우스를 화면 가장자리 끝으로 밀면 나옵니다" if enabled
+                        else "가장자리 조작판을 껐습니다 (보기 메뉴에서 다시 켤 수 있어요)", 4000)
+        if edge is not None:
+            self.settings.q.setValue("mini/edge", edge)
+            if edge in self.a_edge_pos:
+                self.a_edge_pos[edge].setChecked(True)
+            self.edge.set_edge(edge)
+
+    def _on_list_repeat_box(self, on: bool) -> None:
+        """재생목록 창의 '목록 반복' 체크 → 같은 반복 상태로."""
+        self.set_repeat_mode("list" if on else "off")
 
     def playlist_next(self) -> None:
         if not self.playlists.active:
@@ -2383,6 +2494,7 @@ class MainWindow(QMainWindow):
     def _on_app_state(self, state) -> None:
         if state == Qt.ApplicationState.ApplicationActive:
             self._check_clipboard()
+            self.library.maybe_rescan()        # 다른 프로그램에서 폴더에 파일을 넣고 돌아왔을 때
 
     def _check_clipboard(self) -> None:
         text = QApplication.clipboard().text().strip()
@@ -2402,6 +2514,8 @@ class MainWindow(QMainWindow):
 
     def _on_title(self, title: str) -> None:
         self.lbl_title.setText(title)
+        if getattr(self, "edge", None):
+            self.edge.set_title(title)
         if self._music_on:
             self._refresh_music_info()
         self.setWindowTitle(f"{APP_NAME} — {title}" if title else APP_NAME)
@@ -2681,6 +2795,8 @@ class MainWindow(QMainWindow):
             return
         self._audio_only = on
         self.controls.set_audio_only(on)
+        if getattr(self, "edge", None):
+            self.edge.set_audio_only(on)
         try:
             self.player.mpv["vid"] = "no" if (on or self._media_audio) else "auto"
         except Exception:  # noqa: BLE001
@@ -2752,6 +2868,7 @@ class MainWindow(QMainWindow):
             self._set_controls_overlay(True)
             self.showFullScreen()
             self._fullscreen = True
+            self.edge.set_suspended(True)      # 수업 화면(전체화면) 위에는 조작판을 띄우지 않는다
             self.controls.set_fullscreen(True)
             self._hide_timer.start()
         else:
@@ -2766,6 +2883,7 @@ class MainWindow(QMainWindow):
             for d, vis in self._dock_state.items():
                 d.setVisible(vis)
             self._fullscreen = False
+            self.edge.set_suspended(False)
             self.player.setCursor(Qt.CursorShape.OpenHandCursor if self.player.vr_enabled else Qt.CursorShape.ArrowCursor)
 
     # ------------------------------------------------------------------ 창을 영상 비율에 맞추기
@@ -2989,7 +3107,32 @@ class MainWindow(QMainWindow):
         c = self.autodl_store.counts()
         self.statusBar().showMessage(f"자동 받기 완료: {item.label()} · 남은 영상 {c['wait']}개", 6000)
 
+    TAB_TIPS = {
+        "라이브러리": "내 폴더의 영상·음악 목록 — 폴더 추가, 검색, 360°·미리 받기·녹화 골라 보기",
+        "재생목록": "수업 순서대로 영상을 모아 두고 차례로 재생",
+        "자동 받기": "담아 둔 유튜브 영상을 앱이 켜져 있는 동안 하나씩 차례로 받기",
+        "다운로드": "받는 중인 영상·녹화의 진행 상황",
+    }
+
+    def _apply_tab_tips(self) -> None:
+        """옆 창이 탭으로 묶이면 Qt 가 탭 막대를 새로 만들어서, 그때마다 설명을 다시 단다."""
+        from PySide6.QtWidgets import QTabBar
+        for tb in self.findChildren(QTabBar):
+            for i in range(tb.count()):
+                tip = self.TAB_TIPS.get(tb.tabText(i))
+                if tip and tb.tabToolTip(i) != tip:
+                    tb.setTabToolTip(i, tip)
+
+    def _localize_tooltips(self) -> None:
+        if sys.platform == "darwin":
+            return
+        for w in self.findChildren(QWidget):
+            t = w.toolTip()
+            if t and ("⌘" in t or "⇧" in t):
+                w.setToolTip(bootstrap.keys(t))
+
     def _show_dock(self, dock: QDockWidget) -> None:
+        QTimer.singleShot(0, self._apply_tab_tips)
         """도크를 보이게 한다. 전체화면 중이면 지금은 숨긴 채로 두고 전체화면을 끝낼 때 보이게 한다."""
         if self._fullscreen:
             self._dock_state[dock] = True
@@ -3165,6 +3308,7 @@ class MainWindow(QMainWindow):
             self._fit_base_win_w = self.width()
 
     def closeEvent(self, e: QCloseEvent) -> None:
+        self.edge.close_all()
         self.autodl.shutdown()
         self.downloads.cancel_all()
         self.settings.library_folders = self.library.folders
