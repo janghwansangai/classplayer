@@ -82,6 +82,12 @@ def copy_license_files(dist: md.Distribution, name: str) -> list[str]:
 
 
 def main() -> int:
+    # 윈도우 콘솔(cp1252 등)에서도 한글·기호를 찍다가 죽지 않게 (v0.5.8 윈도우 빌드가 '→' 때문에 실패)
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     if OUT.exists():
         shutil.rmtree(OUT)
     OUT.mkdir(parents=True)
@@ -136,7 +142,7 @@ def main() -> int:
               "라이선스를 따르며, 소스는 FFmpeg·mpv 빌드 안내(위 주소)에서 찾을 수 있습니다.", ""]
     (OUT / "NOTICE.md").write_text("\n".join(lines), encoding="utf-8")
     write_site(rows)
-    print(f"licenses: {len(list(OUT.iterdir()))} files → {OUT.relative_to(ROOT)}")
+    print(f"licenses: {len(list(OUT.iterdir()))} files -> {OUT.relative_to(ROOT)}")
     if missing:
         print("설치되지 않은 패키지(건너뜀):", ", ".join(missing))
     return 0
