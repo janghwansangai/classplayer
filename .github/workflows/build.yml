@@ -121,7 +121,7 @@ jobs:
           $exe = (Resolve-Path dist\ClassPlayer\ClassPlayer.exe).Path
           $env:CLASSPLAYER_SELFTEST = "argv"
           Push-Location C:\Windows\System32
-          $out = & $exe $f
+          & $exe $f | Tee-Object -Variable out      # 파이프로 받아야 창 프로그램이 끝날 때까지 기다린다
           Pop-Location
           Write-Host $out
           $line = ($out | Select-String 'SELFTEST (.*)').Matches[0].Groups[1].Value
