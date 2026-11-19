@@ -17,7 +17,23 @@ from PySide6.QtCore import QObject, QStandardPaths, Signal
 from PySide6.QtGui import QPixmap
 
 THUMB_W = 256
-BIG_FILE = 2 * 1024 ** 3      # 이보다 큰 파일은 건너뛰며 미리보기를 뽑는다
+BIG_FILE = 2 * 1024 ** 3      # 이보다 큰 파일은 미리보기를 만들지 않는다
+HEAVY_BPS = 20_000_000        # 평균 20Mbps 넘는 고화질 영상(카메라 4K 원본 등)도 만들지 않는다 (재생 우선)
+
+
+def preview_plan(size: int, duration: float) -> tuple[str, float]:
+    """탐색 미리보기를 어떻게 뽑을지: ("scan"|"none", 간격 초).
+
+    scan : ffmpeg 한 번으로 파일 전체를 읽으며 키프레임만 뽑는다 (가벼운 영상)
+    none : 미리보기를 만들지 않는다 — 고화질(평균 20Mbps 넘음)이나 2GB 넘는 영상. 재생이 우선.
+    2026-11-19 사용자 신고(윈도우): 소니 4K 56Mbps 1.3GB 영상에서 미리보기 만들기가 4K 키프레임 350장을
+    CPU 로 풀며 파일 전체를 읽어(맥에서도 21초 동안 코어 하나) 재생이 끊기고, 미리보기 창은 '불러오는 중'에
+    검은 칸만 보였다. 사용자 요청: 고화질이면 미리보기 없이 끊김 없는 재생.
+    """
+    interval = max(1.0, min(10.0, duration / 150.0))
+    if size > BIG_FILE or (duration > 0 and size * 8 / duration > HEAVY_BPS):
+        return "none", interval
+    return "scan", interval
 _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
        "Chrome/131.0.0.0 Safari/537.36")
 RETRY_SECONDS = 4.0
@@ -30,7 +46,8 @@ class ThumbnailProvider(QObject):
         super().__init__(parent)
         self.ffmpeg = ffmpeg
         self._gen = 0
-        self._playing = False     # 큰 파일은 재생 중에는 미리보기 뽑기를 쉰다 (하드디스크에서 읽기 다툼 방지)
+        self._playing = False     # 재생 중인지 (지금은 쓰지 않지만 app 이 알려 준다)
+        self.note = ""            # 미리보기를 만들지 않을 때 그 까닭 (미리보기 창에 작게 표시)
         self._lock = threading.Lock()
         # 로컬
         self._dir: Path | None = None
@@ -52,6 +69,7 @@ class ThumbnailProvider(QObject):
 
     def clear(self) -> None:
         self._gen += 1
+        self.note = ""
         self._dir = None
         self._count = 0
         self._cache.clear()
@@ -66,55 +84,30 @@ class ThumbnailProvider(QObject):
         if not self.ffmpeg or duration <= 0:
             return
         gen = self._gen
-        interval = max(1.0, min(10.0, duration / 150.0))
         try:
-            if Path(path).stat().st_size > BIG_FILE:
-                interval = max(interval, duration / 100.0)    # 큰 파일은 100장 정도만
+            size = Path(path).stat().st_size
         except OSError:
-            pass
+            size = 0
+        plan, interval = preview_plan(size, duration)
+        if plan == "none":
+            self.note = "고화질 영상 · 재생이 끊기지 않게 미리보기를 쓰지 않습니다"
+            return
         key = hashlib.sha1(f"{path}|{Path(path).stat().st_mtime}|{interval:.2f}".encode()).hexdigest()[:16]
         out = self._root / key
         self._dir, self._interval = out, interval
 
-        try:
-            big = Path(path).stat().st_size > BIG_FILE
-        except OSError:
-            big = False
         from classplayer.bootstrap import run_low_priority
 
         def work() -> None:
             if not (out / "done").exists():
                 out.mkdir(parents=True, exist_ok=True)
-                if big:
-                    # 큰 파일(수 GB): 전체를 읽으면 디스크·CPU 를 오래 붙잡아 재생이 끊길 수 있어
-                    # 필요한 지점만 건너뛰며 한 장씩 뽑는다. 재생이 자리 잡은 뒤에 시작.
-                    time.sleep(6)
-                    for i in range(int(duration // interval) + 1):
-                        # 재생 중에는 기다린다: 하드디스크에서 영상 읽기와 여기저기 건너뛰며 읽기가 겹치면
-                        # 디스크 헤드가 왔다 갔다 해서 영상이 끊긴다. 일시 정지하면 이어서 뽑는다.
-                        while self._playing and gen == self._gen:
-                            time.sleep(0.5)
-                        if gen != self._gen:
-                            return
-                        t = i * interval
-                        cmd = [self.ffmpeg, "-y", "-v", "error", "-ss", f"{t:.2f}", "-i", path, "-map", "0:v:0",
-                               "-frames:v", "1", "-vf", f"scale={THUMB_W}:-2", "-q:v", "6",
-                               str(out / f"{i + 1:05d}.jpg")]
-                        try:
-                            run_low_priority(cmd, timeout=60)
-                        except Exception:  # noqa: BLE001
-                            continue
-                        if i % 10 == 9 and gen == self._gen:
-                            self._count = len(list(out.glob("*.jpg")))
-                            self.ready.emit()
-                else:
-                    cmd = [self.ffmpeg, "-y", "-v", "error", "-skip_frame", "nokey", "-i", path,
-                           "-vf", f"fps=1/{interval},scale={THUMB_W}:-2", "-fps_mode", "vfr", "-q:v", "6",
-                           str(out / "%05d.jpg")]
-                    try:
-                        run_low_priority(cmd, timeout=600)
-                    except Exception:  # noqa: BLE001
-                        return
+                cmd = [self.ffmpeg, "-y", "-v", "error", "-skip_frame", "nokey", "-i", path,
+                       "-vf", f"fps=1/{interval},scale={THUMB_W}:-2", "-fps_mode", "vfr", "-q:v", "6",
+                       str(out / "%05d.jpg")]
+                try:
+                    run_low_priority(cmd, timeout=600)
+                except Exception:  # noqa: BLE001
+                    return
                 if gen != self._gen:
                     return
                 (out / "done").touch()

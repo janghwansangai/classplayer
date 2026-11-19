@@ -16,3 +16,8 @@ bin/
 selftest.mp4
 !packaging/classplayer.spec
 .wrangler/
+# 사용자가 확인용으로 넣는 영상 (커밋 금지)
+/*.MP4
+/*.mp4
+/*.mov
+/*.MOV

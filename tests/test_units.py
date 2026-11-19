@@ -294,3 +294,28 @@ def test_shortcut_text_per_os(monkeypatch):
     assert bootstrap.keys(s) == "검색 (Ctrl+Shift+F) · 열기 (Ctrl+O) · 이음새 (Ctrl+Shift+3) · 반복 (Ctrl+T)"
     monkeypatch.setattr(bootstrap.sys, "platform", "darwin")
     assert bootstrap.keys(s) == s
+
+
+def test_hwdec_modes_per_os():
+    """영상 풀기 방식: 윈도우 '자동'은 OpenGL 연동 없이 D3D11 복사, 맥은 그래픽 카드 직접 (2026-11-19)."""
+    from classplayer.player.mpv_widget import HWDEC_MODES, hwdec_value, platform_options
+    assert hwdec_value("auto", "win32") == "d3d11va-copy,auto-copy-safe"
+    assert hwdec_value("dxva2", "win32").startswith("dxva2-copy")
+    assert hwdec_value("direct", "win32") == "auto-safe"          # v0.6.1 까지의 방식
+    assert hwdec_value("auto", "darwin") == "auto-safe"
+    assert hwdec_value("dxva2", "darwin") == "auto-safe"          # 맥엔 없는 방식 → 기본
+    assert all(hwdec_value("no", p) == "no" for p in ("win32", "darwin"))
+    assert set(HWDEC_MODES) == {"auto", "direct", "dxva2", "no"}
+    w = platform_options("win32")
+    assert w["audio_buffer"] >= 0.5 and w["vd_lavc_dr"] == "no"
+    assert platform_options("darwin") == {}
+
+
+def test_preview_plan_heavy_video():
+    """탐색 미리보기: 가벼운 영상만 만들고, 고화질(20Mbps 넘음)·2GB 넘는 영상은 재생이 끊기지 않게 만들지 않는다."""
+    from classplayer.player.thumbnails import preview_plan
+    assert preview_plan(80 * 2**20, 220.0)[0] == "scan"                 # 유튜브 1080p 3Mbps
+    assert preview_plan(1_279_320_564, 174.7)[0] == "none"              # 소니 4K 56Mbps (C0039.MP4)
+    assert preview_plan(11 * 2**30, 6000.0)[0] == "none"                # 11GB 360 원본
+    assert preview_plan(300 * 2**20, 200.0)[0] == "scan"                # 휴대폰 1080p 약 12Mbps
+    assert preview_plan(10 * 2**20, 0.0)[0] == "scan"

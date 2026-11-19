@@ -433,11 +433,20 @@ class SeekPreview(QFrame):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(6, 6, 6, 6)
         lay.setSpacing(4)
+        self.note = QLabel("")       # 미리보기를 쓰지 않는 까닭 (고화질 영상 등)
+        self.note.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.note.setWordWrap(True)
+        self.note.setFixedWidth(200)
+        self.note.setStyleSheet("color: #8b8e99; font-size: 11px;")
+        self.note.hide()
         lay.addWidget(self.img)
         lay.addWidget(self.time)
+        lay.addWidget(self.note)
 
-    def show_at(self, pm, t: float, anchor: QPoint, has_source: bool = True) -> None:
+    def show_at(self, pm, t: float, anchor: QPoint, has_source: bool = True, note: str = "") -> None:
         self.time.setText(fmt_time(t))
+        self.note.setVisible(bool(note) and (pm is None or pm.isNull()))
+        self.note.setText(note)
         if pm is not None and not pm.isNull():
             self.img.setPixmap(pm.scaled(self.img.size(), Qt.AspectRatioMode.KeepAspectRatio,
                                          Qt.TransformationMode.SmoothTransformation))
@@ -978,6 +987,7 @@ class MainWindow(QMainWindow):
             ytdl_path=self.ytdlp, js_runtime=self.js_runtime,
             stream_max_height=self.settings.stream_max_height,
             vr_hq=self.settings.vr_hq, vr_max_magnification=self.settings.vr_max_magnification,
+            hwdec_mode=self.settings.hwdec_mode,
         )
         self.player.set_volume(self.settings.volume)
         if self.settings.audio_device and self.settings.audio_device != "auto":
@@ -1278,6 +1288,8 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(1000, self.edge.start)
         p.file_loaded.connect(self._on_file_loaded)
         p.hwdec_changed.connect(self._on_hwdec)
+        p.hwdec_error.connect(self._on_hwdec_error)
+        p.screenshot_done.connect(self._on_screenshot_done)
         p.codec_changed.connect(self._on_codec)
         p.video_size_changed.connect(lambda _w, _h: self._update_info())
         p.video_size_changed.connect(self._on_video_size_for_fit)
@@ -1454,6 +1466,28 @@ class MainWindow(QMainWindow):
         act(m_set, "캡처 저장 폴더 변경…", self._change_capture_dir)
         self.m_audio = m_set.addMenu("소리 출력 장치")
         self.m_audio.aboutToShow.connect(self._fill_audio_devices)
+        # 영상 풀기 방식: 화면이 깨지거나(색이 늦게 따라옴) 소리가 끊길 때 바꿔 본다. 재생 중에도 바로 적용.
+        self.m_hwdec = m_set.addMenu("영상 풀기 방식 (화면·소리가 이상할 때)")
+        g_hw = QActionGroup(self)
+        self.a_hwdec = {}
+        win = sys.platform == "win32"
+        for mode, text, tip in (
+            ("auto", "자동 (권장)", "운영체제에 맞는 가장 안정적인 방식"),
+            ("direct", "그래픽 카드 직접 연결 (v0.6.1 까지 방식)", "복사 없이 그래픽 카드 결과를 바로 그림. 빠르지만 일부 그래픽 카드에서 화면이 깨질 수 있음"),
+            ("dxva2", "예전 방식 (DXVA2)", "오래된 그래픽 카드에서 '자동'이 이상할 때"),
+            ("no", "CPU 로만 풀기 (그래픽 카드 안 씀)", "가장 호환성이 좋지만 4K 같은 큰 영상은 끊길 수 있음"),
+        ):
+            if not win and mode in ("direct", "dxva2"):
+                continue    # 맥은 '자동'이 곧 그래픽 카드 직접 연결
+            a = QAction(text, self)
+            a.setCheckable(True)
+            a.setChecked(mode == self.player.hwdec_mode)
+            a.setToolTip(tip)
+            a.triggered.connect(lambda _c=False, m=mode: self._set_hwdec_mode(m))
+            g_hw.addAction(a)
+            self.m_hwdec.addAction(a)
+            self.a_hwdec[mode] = a
+        self.m_hwdec.setToolTipsVisible(True)
         m_set.addSeparator()
         act(m_set, "기본 영상 플레이어로 등록…", self.register_default_player)
 
@@ -2554,7 +2588,7 @@ class MainWindow(QMainWindow):
             frac = slider.value() / max(1, slider.maximum())
             x = int(frac * slider.width())
         anchor = slider.mapToGlobal(QPoint(x, 0))
-        self.preview.show_at(self.thumbs.thumbnail(t), t, anchor, self.thumbs.has_source())
+        self.preview.show_at(self.thumbs.thumbnail(t), t, anchor, self.thumbs.has_source(), self.thumbs.note)
 
     def _refresh_preview(self) -> None:
         if self.preview.isVisible():
@@ -2606,8 +2640,31 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"{APP_NAME} — {title}" if title else APP_NAME)
 
     def _on_hwdec(self, hw: str) -> None:
+        if hw == "no" and self._hwdec and self._hwdec != "no" and self.player.hwdec_errors:
+            # 그래픽 카드 디코딩이 실패해 mpv 가 CPU 로 바꿨다 (큰 영상이면 끊길 수 있다)
+            self.notify("그래픽 카드로 영상을 풀지 못해 CPU 로 바꿨습니다. 끊기면 설정 › 영상 풀기 방식에서 "
+                        "다른 방식을 골라 보세요.", 9000, "방식 고르기", self._popup_hwdec_menu)
         self._hwdec = hw
         self._update_info()
+
+    def _on_hwdec_error(self, n: int) -> None:
+        if n == 1:
+            print(f"[hwdec] 하드웨어 디코딩 오류 ({self._hwdec or '?'})", file=sys.stderr)
+        if n == 3:      # 한두 번은 영상 자체 손상일 수 있어 세 번째에 알린다
+            self.notify("그래픽 카드가 영상을 푸는 중 오류가 났습니다 (화면이 번질 수 있음). "
+                        "계속되면 설정 › 영상 풀기 방식을 바꿔 보세요.", 9000, "방식 고르기", self._popup_hwdec_menu)
+
+    def _popup_hwdec_menu(self) -> None:
+        from PySide6.QtGui import QCursor
+        self.m_hwdec.popup(QCursor.pos())
+
+    def _set_hwdec_mode(self, mode: str) -> None:
+        self.settings.hwdec_mode = mode
+        self.player.set_hwdec_mode(mode)
+        for m, a in self.a_hwdec.items():
+            a.setChecked(m == mode)
+        names = {"auto": "자동", "direct": "그래픽 카드 직접 연결", "dxva2": "예전 방식 (DXVA2)", "no": "CPU 로만"}
+        self.notify(f"영상 풀기 방식: {names.get(mode, mode)} — 지금 영상에 바로 적용합니다")
 
     def _on_codec(self, codec: str) -> None:
         self._codec = codec
@@ -2740,10 +2797,24 @@ class MainWindow(QMainWindow):
         d = Path(self.settings.capture_dir)
         d.mkdir(parents=True, exist_ok=True)
         name = d / f"캡처_{_dt.datetime.now():%Y%m%d_%H%M%S}.png"
-        if self.player.screenshot(str(name)):
-            self.notify(f"캡처를 저장했습니다: {name.name}", 5000, "폴더 열기", lambda: self._open_folder(d))
-        else:
+        if not self.player.screenshot(str(name)):       # 끝나면 _on_screenshot_done
+            self._on_screenshot_done(str(name), False)
+
+    def _on_screenshot_done(self, path: str, ok: bool) -> None:
+        p = Path(path)
+        note = ""
+        if not ok:
+            # 원본 해상도 캡처가 안 되면 창에 보이는 크기로라도 저장
+            ok = self.player.screenshot_window(path)
+            note = " (화면 크기)"
+        if not ok:
             self.notify("캡처에 실패했습니다", 4000)
+            return
+        from PySide6.QtGui import QImageReader
+        sz = QImageReader(path).size()
+        res = f"{sz.width()}×{sz.height()}" if sz.isValid() else ""
+        self.notify(f"캡처를 저장했습니다{note}: {p.name}" + (f" · {res}" if res else ""), 5000,
+                    "폴더 열기", lambda: self._open_folder(p.parent))
 
     def _open_folder(self, d: Path) -> None:
         from PySide6.QtCore import QUrl
@@ -2933,11 +3004,37 @@ class MainWindow(QMainWindow):
         self.library.focus_search()
 
     def _show_env(self) -> None:
+        P = self.player
         hw = self._hwdec or "(재생 중이 아님)"
-        txt = (f"yt-dlp: {self.ytdlp or '없음'}\nffmpeg: {self.ffmpeg or '없음'}\nffprobe: {self.ffprobe or '없음'}\n"
-               f"JS 런타임: {self.js_runtime or '없음 (유튜브 일부 화질이 빠질 수 있음)'}\n"
-               f"libmpv: {self.player.property('mpv-version', '')}\n하드웨어 디코딩: {hw}")
-        QMessageBox.information(self, "환경 정보", f"<pre>{txt}</pre>")
+        lines = [
+            f"ClassPlayer: {__version__} ({sys.platform})",
+            f"yt-dlp: {self.ytdlp or '없음'}", f"ffmpeg: {self.ffmpeg or '없음'}", f"ffprobe: {self.ffprobe or '없음'}",
+            f"JS 런타임: {self.js_runtime or '없음 (유튜브 일부 화질이 빠질 수 있음)'}",
+            f"libmpv: {P.property('mpv-version', '')}",
+            f"그래픽: {P.gl_renderer or '?'}",
+            f"영상 풀기 방식: {P.hwdec_mode} → {P.property('hwdec', '')}",
+            f"하드웨어 디코딩: {hw}",
+        ]
+        if self._current:
+            vw, vh = P.video_size
+            fps = P.property("container-fps", 0) or 0
+            vbr = P.property("video-bitrate", 0) or 0
+            lines += [
+                f"지금 영상: {self._codec.split(' ')[0] if self._codec else '?'} {vw}×{vh} {fps:.2f}fps"
+                + (f" {vbr / 1e6:.1f}Mbps" if vbr else ""),
+                f"버린 프레임: {P.property('frame-drop-count', 0)} (디코더 {P.property('decoder-frame-drop-count', 0)}), "
+                f"늦게 그린 프레임: {P.property('vo-delayed-frame-count', 0)}",
+                f"하드웨어 디코딩 오류: {P.hwdec_errors}번",
+                f"소리 출력: {P.property('current-ao', '') or '?'}",
+            ]
+        txt = "\n".join(lines)
+        box = QMessageBox(QMessageBox.Icon.Information, "환경 정보", txt, QMessageBox.StandardButton.Ok, self)
+        box.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        copy = box.addButton("복사", QMessageBox.ButtonRole.ActionRole)
+        copy.setToolTip("이 내용을 복사해 오류 신고·문의에 붙여 넣을 수 있습니다")
+        copy.clicked.connect(lambda: (QApplication.clipboard().setText(txt), self.notify("환경 정보를 복사했습니다")))
+        box.exec()
+        box.deleteLater()
 
     # ------------------------------------------------------------------ 전체화면
     def toggle_fullscreen(self) -> None:

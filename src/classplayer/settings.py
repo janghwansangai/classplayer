@@ -121,6 +121,15 @@ class Settings:
         self.q.setValue("audio/device", d)
 
     @property
+    def hwdec_mode(self) -> str:
+        """영상 풀기 방식: auto / direct / dxva2 / no (player.mpv_widget.HWDEC_MODES)."""
+        return str(self.q.value("play/hwdec", "auto"))
+
+    @hwdec_mode.setter
+    def hwdec_mode(self, mode: str) -> None:
+        self.q.setValue("play/hwdec", mode)
+
+    @property
     def fit_window(self) -> bool:
         """영상을 열 때 창 크기를 영상 비율에 맞춰 검은 띠를 없앤다."""
         return self.q.value("view/fit_window", True, type=bool)

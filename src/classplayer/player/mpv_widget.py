@@ -9,10 +9,12 @@ from __future__ import annotations
 import math
 from pathlib import Path
 import os
+import sys
+import threading
 from typing import Any
 
 from PySide6.QtCore import QByteArray, QEvent, QPointF, Qt, Signal
-from PySide6.QtGui import QMouseEvent, QNativeGestureEvent, QOpenGLContext, QSurfaceFormat, QWheelEvent
+from PySide6.QtGui import QImage, QMouseEvent, QNativeGestureEvent, QOpenGLContext, QSurfaceFormat, QWheelEvent
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from OpenGL import GL
 
@@ -26,6 +28,44 @@ from classplayer.vr.stitch import flat, rot_matrix
 from classplayer.vr.view import VrView  # noqa: E402
 
 DRAG_THRESHOLD_PX = 4
+
+# 영상 풀기(디코딩) 방식 — 설정 play/hwdec. 설정 › 영상 풀기 방식 메뉴에서 고른다.
+#   auto   : 권장 (윈도우 = D3D11 로 풀고 복사, 맥 = 그래픽 카드 직접)
+#   direct : 그래픽 카드 결과를 OpenGL 로 바로 넘김 (v0.6.1 까지의 기본, 윈도우에선 nvdec CUDA 연동 등)
+#   dxva2  : 윈도우 예전 방식 DXVA2 로 풀고 복사
+#   no     : CPU 로만 풀기
+HWDEC_MODES = ("auto", "direct", "dxva2", "no")
+
+
+def hwdec_value(mode: str, platform: str = sys.platform) -> str:
+    """설정값 → mpv hwdec 값 (우선순위 목록).
+
+    윈도우 '자동'은 2026-11-19 사용자 신고(소니 4K 56Mbps XAVC S 영상에서 옷 색이 늦게 따라오고 소리가 끊김,
+    같은 파일이 맥·다른 플레이어에선 정상) 뒤로 OpenGL 연동(nvdec CUDA–GL, dxva2 NV_DX_interop) 대신
+    윈도우 표준인 D3D11 로 풀어 평범한 메모리 그림으로 넘긴다. 드라이버마다 다른 연동 기능을 쓰지 않는 길.
+    """
+    win = platform.startswith("win")
+    if mode == "no":
+        return "no"
+    if mode == "direct" or not win:
+        return "auto-safe"
+    if mode == "dxva2":
+        return "dxva2-copy,auto-copy-safe"
+    return "d3d11va-copy,auto-copy-safe"
+
+
+def platform_options(platform: str = sys.platform) -> dict[str, Any]:
+    """운영체제별로 더하는 mpv 옵션."""
+    if platform.startswith("win"):
+        return {
+            # 소리 버퍼 0.2초(기본) → 0.5초: 무거운 영상에서 잠깐 밀려도 소리가 끊기지 않게.
+            # 음량은 mpv 가 내보낼 때 적용하므로 음량 반응은 느려지지 않는다.
+            "audio_buffer": 0.5,
+            # 소프트웨어 디코딩 때 GPU 에 매핑된 메모리로 바로 풀기(direct rendering)를 끈다.
+            # 윈도우 OpenGL 드라이버마다 동작이 달라 화면 깨짐 원인이 될 수 있다. 성능 차이는 작다.
+            "vd_lavc_dr": "no",
+        }
+    return {}
 
 
 def _get_proc_address(_ctx: Any, name: bytes) -> int:
@@ -51,6 +91,8 @@ class MpvWidget(QOpenGLWidget):
     subs_changed = Signal(bool)        # 자막이 화면에 나오는지          # 열기 실패 (mpv 오류 번호)
     eof_reached = Signal()
     hwdec_changed = Signal(str)
+    hwdec_error = Signal(int)         # 하드웨어 디코딩 오류 (이 파일에서 몇 번째)
+    screenshot_done = Signal(str, bool)   # 캡처 저장 끝 (경로, 성공)
     volume_changed = Signal(float)
     mute_changed = Signal(bool)
     codec_changed = Signal(str)
@@ -65,7 +107,8 @@ class MpvWidget(QOpenGLWidget):
     _request_update = Signal()
 
     def __init__(self, parent=None, *, ytdl_path: str | None = None, js_runtime: str | None = None,
-                 stream_max_height: int = 2160, vr_hq: bool = True, vr_max_magnification: float = 3.0):
+                 stream_max_height: int = 2160, vr_hq: bool = True, vr_max_magnification: float = 3.0,
+                 hwdec_mode: str = "auto"):
         super().__init__(parent)
         fmt = QSurfaceFormat()
         fmt.setVersion(3, 3)
@@ -78,7 +121,7 @@ class MpvWidget(QOpenGLWidget):
 
         opts: dict[str, Any] = {
             "vo": "libmpv",
-            "hwdec": "auto-safe",
+            "hwdec": hwdec_value(hwdec_mode),
             "keep_open": "yes",
             "idle": "yes",
             "osc": False,
@@ -94,6 +137,10 @@ class MpvWidget(QOpenGLWidget):
             "video_sync": "audio",
             "volume_max": 150,
         }
+        opts.update(platform_options())
+        self.hwdec_mode = hwdec_mode if hwdec_mode in HWDEC_MODES else "auto"
+        self.hwdec_errors = 0         # 이 파일에서 하드웨어 디코딩 오류 수 (진단·안내용)
+        self.gl_renderer = ""         # 그래픽 카드 이름 (환경 정보)
         script_opts = []
         if ytdl_path:
             script_opts.append(f"ytdl_hook-ytdl_path={ytdl_path}")
@@ -137,7 +184,8 @@ class MpvWidget(QOpenGLWidget):
         m.observe_property("dwidth", self._on_dims)
         m.observe_property("dheight", self._on_dims)
         m.observe_property("media-title", lambda _n, v: self.media_title_changed.emit(str(v or "")))
-        m.observe_property("hwdec-current", lambda _n, v: v and self.hwdec_changed.emit(str(v)))
+        # 하드웨어 디코딩이 실패해 CPU 로 넘어가면 "no" 가 온다 → 그것도 알린다
+        m.observe_property("hwdec-current", lambda _n, v: v is not None and self.hwdec_changed.emit(str(v)))
         m.observe_property("video-codec", lambda _n, v: self.codec_changed.emit(str(v or "")))
         m.observe_property("volume", lambda _n, v: self.volume_changed.emit(float(v or 0.0)))
         m.observe_property("mute", lambda _n, v: self.mute_changed.emit(bool(v)))
@@ -156,6 +204,7 @@ class MpvWidget(QOpenGLWidget):
 
         @m.event_callback("file-loaded")
         def _loaded(_event):
+            self.hwdec_errors = 0
             try:
                 self.file_loaded.emit(str(m.path or ""))
             except Exception:  # noqa: BLE001
@@ -166,6 +215,10 @@ class MpvWidget(QOpenGLWidget):
         if component == "vd" and "Using hardware decoding (" in message:
             self.hwdec_changed.emit(message.split("(", 1)[1].split(")", 1)[0])
             return
+        if component == "vd" and "(hardware decoding)" in message:
+            # 그래픽 카드가 프레임을 못 풀었다: 그 자리 화면이 번지고, 3번이면 mpv 가 CPU 로 바꾼다
+            self.hwdec_errors += 1
+            self.hwdec_error.emit(self.hwdec_errors)
         if level in ("info", "v", "debug", "trace"):
             return
         self.log_message.emit(level, component, message.rstrip())
@@ -285,10 +338,25 @@ class MpvWidget(QOpenGLWidget):
         try:
             if (self.mpv["lavfi-complex"] or "") == want:
                 return
-            self.mpv["hwdec"] = "auto-copy-safe" if on else "auto-safe"
+            self.mpv["hwdec"] = self._hwdec_for(on)
             self.mpv["lavfi-complex"] = want
         except Exception as e:  # noqa: BLE001
             self.log_message.emit("warn", "vr", f"두 렌즈 스트림 합치기 실패: {e}")
+
+    def _hwdec_for(self, dual: bool) -> str:
+        if self.hwdec_mode == "no":
+            return "no"
+        # 두 렌즈 합치기(lavfi-complex)는 필터를 거치므로 복사형이어야 한다
+        return "auto-copy-safe" if dual else hwdec_value(self.hwdec_mode)
+
+    def set_hwdec_mode(self, mode: str) -> None:
+        """영상 풀기 방식을 바꾼다. 재생 중이면 mpv 가 디코더를 다시 만들어 바로 적용된다."""
+        self.hwdec_mode = mode if mode in HWDEC_MODES else "auto"
+        self.hwdec_errors = 0
+        try:
+            self.mpv["hwdec"] = self._hwdec_for(self.dual_stream)
+        except Exception as e:  # noqa: BLE001
+            self.log_message.emit("warn", "vd", f"영상 풀기 방식 바꾸기 실패: {e}")
 
     @property
     def dual_stream(self) -> bool:
@@ -356,9 +424,91 @@ class MpvWidget(QOpenGLWidget):
         self.mpv.command("cycle", "audio")
 
     def screenshot(self, path: str) -> bool:
-        """화면에 보이는 그대로 저장한다 (360도 모드면 투영된 시점이 저장된다)."""
+        """캡처를 시작한다. 끝나면 screenshot_done(경로, 성공) 신호.
+
+        일반 화면: mpv 가 영상 원래 해상도(4K 면 3840×2160)로, 화면과 같은 색 처리를 거쳐 무손실 PNG 로 저장한다
+            (보이는 자막 포함, 10비트 영상은 16비트 PNG). mpv 가 따로 스레드에서 저장하므로 재생이 멈추지 않는다.
+            예전엔 창에 보이는 크기(grabFramebuffer)로 저장해 해상도가 낮았다 (2026-11-19 사용자 요청).
+        360도: 지금 보는 시점을 원본 화소 밀도에 맞는 크기(최대 4096 폭)로 따로 그려 저장한다.
+        """
+        if self.vr_enabled and self._vr_ok and self._vr_tex:
+            img = self._grab_vr_hq()
+            if img is None or img.isNull():
+                img = self.grabFramebuffer()
+
+            def save() -> None:
+                ok = (not img.isNull()) and img.save(path)
+                self.screenshot_done.emit(path, bool(ok))
+            threading.Thread(target=save, daemon=True).start()
+            return True
+        try:
+            fut = self.mpv.command_async("screenshot-to-file", path, "subtitles")
+        except Exception as e:  # noqa: BLE001
+            self.log_message.emit("warn", "screenshot", str(e))
+            return False
+
+        def done(f) -> None:
+            try:
+                f.result()
+                ok = os.path.exists(path)
+            except Exception as e:  # noqa: BLE001
+                self.log_message.emit("warn", "screenshot", str(e))
+                ok = False
+            self.screenshot_done.emit(path, ok)
+        fut.add_done_callback(done)
+        return True
+
+    def screenshot_window(self, path: str) -> bool:
+        """창에 보이는 크기 그대로 저장 (원본 해상도 캡처가 실패했을 때)."""
         img = self.grabFramebuffer()
         return (not img.isNull()) and img.save(path)
+
+    def _grab_vr_hq(self) -> QImage | None:
+        """360도 시점을 화면보다 크게(원본 1픽셀 ≈ 결과 1픽셀) 따로 그려 그림으로 돌려준다."""
+        w, h = self._view_px()
+        tw, th = self._vr_size
+        v = self.vr
+        if tw <= 0 or w <= 0:
+            return None
+        src_px = v.effective_full_width(tw) * v.fov / (2 * math.pi)      # 지금 시야에 들어온 원본 가로 픽셀 수
+        limit = min(4096, self._max_tex)
+        cw = int(max(w, min(src_px, limit)))
+        ch = max(1, round(cw * h / w))
+        if ch > limit:
+            cw, ch = max(1, round(cw * limit / ch)), limit
+        tex = fbo = 0
+        self.makeCurrent()
+        try:
+            tex = int(GL.glGenTextures(1))
+            GL.glBindTexture(GL.GL_TEXTURE_2D, tex)
+            GL.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA8, cw, ch, 0, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, None)
+            GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
+            fbo = int(GL.glGenFramebuffers(1))
+            GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, fbo)
+            GL.glFramebufferTexture2D(GL.GL_FRAMEBUFFER, GL.GL_COLOR_ATTACHMENT0, GL.GL_TEXTURE_2D, tex, 0)
+            if GL.glCheckFramebufferStatus(GL.GL_FRAMEBUFFER) != GL.GL_FRAMEBUFFER_COMPLETE:
+                return None
+            self._draw_vr(fbo, cw, ch, tw, th, emit=False)
+            GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, fbo)
+            GL.glPixelStorei(GL.GL_PACK_ALIGNMENT, 1)
+            data = GL.glReadPixels(0, 0, cw, ch, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
+            raw = bytes(data)
+            img = QImage(raw, cw, ch, cw * 4, QImage.Format.Format_RGBA8888)
+            # OpenGL 은 아래 줄부터 읽힌다 → 위아래 뒤집기 (grabFramebuffer 와 같은 방향)
+            return img.mirrored(False, True).convertToFormat(QImage.Format.Format_RGB888)
+        except Exception as e:  # noqa: BLE001
+            self.log_message.emit("warn", "screenshot", f"360도 고해상도 캡처 실패: {e}")
+            return None
+        finally:
+            try:
+                if fbo:
+                    GL.glDeleteFramebuffers(1, [fbo])
+                if tex:
+                    GL.glDeleteTextures(1, [tex])
+                v.compute_magnification(w, tw)      # 화면 기준 확대 배율으로 되돌림
+                self._restore_gl_state(int(self.defaultFramebufferObject()))
+            finally:
+                self.doneCurrent()
 
     def property(self, name: str, default: Any = None) -> Any:
         try:
@@ -419,6 +569,12 @@ class MpvWidget(QOpenGLWidget):
             self._max_tex = int(GL.glGetIntegerv(GL.GL_MAX_TEXTURE_SIZE))
         except Exception:  # noqa: BLE001
             self._max_tex = 4096
+        try:
+            rnd = GL.glGetString(GL.GL_RENDERER) or b""
+            ver = GL.glGetString(GL.GL_VERSION) or b""
+            self.gl_renderer = f"{rnd.decode(errors='replace')} (OpenGL {ver.decode(errors='replace')})"
+        except Exception:  # noqa: BLE001
+            self.gl_renderer = ""
         try:
             self._init_vr_gl()
             self._vr_ok = True
@@ -534,7 +690,7 @@ class MpvWidget(QOpenGLWidget):
         except Exception:  # noqa: BLE001
             pass
 
-    def _draw_vr(self, target: int, w: int, h: int, tw: int, th: int) -> None:
+    def _draw_vr(self, target: int, w: int, h: int, tw: int, th: int, emit: bool = True) -> None:
         v = self.vr
         mag = v.compute_magnification(w, tw)
         GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, target)
@@ -584,7 +740,7 @@ class MpvWidget(QOpenGLWidget):
         GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
         GL.glUseProgram(0)
         key = round(mag, 2)
-        if key != self._last_mag_key:
+        if emit and key != self._last_mag_key:
             self._last_mag_key = key
             self.vr_changed.emit(v)
 
