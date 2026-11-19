@@ -130,6 +130,16 @@ class Settings:
         self.q.setValue("play/hwdec", mode)
 
     @property
+    def display_sync(self) -> bool:
+        """화면 박자 맞춤 (부드러운 재생). 기본: 윈도우 켬, 맥 끔 (player.mpv_widget.display_sync_default)."""
+        from classplayer.player.mpv_widget import display_sync_default
+        return self.q.value("play/display_sync", display_sync_default(), type=bool)
+
+    @display_sync.setter
+    def display_sync(self, on: bool) -> None:
+        self.q.setValue("play/display_sync", bool(on))
+
+    @property
     def fit_window(self) -> bool:
         """영상을 열 때 창 크기를 영상 비율에 맞춰 검은 띠를 없앤다."""
         return self.q.value("view/fit_window", True, type=bool)

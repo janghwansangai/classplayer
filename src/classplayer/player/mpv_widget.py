@@ -78,6 +78,27 @@ def hwdec_value(mode: str, platform: str = sys.platform) -> str:
     return "d3d11va-copy,auto-copy-safe"
 
 
+def display_sync_default(platform: str = sys.platform) -> bool:
+    """화면 박자 맞춤(video-sync=display-resample) 기본값: 윈도우만 켠다.
+
+    2026-11-20 사용자 신고: 윈도우에서 미디어 플레이어보다 끊기는 느낌. 영상 시계(audio)로만 내보내면
+    모니터 60Hz 와 한 박자(17ms)씩 어긋난다. 윈도우 OpenGL 화면 교체는 화면 합성기(DWM)가 모니터 박자에 묶어 주므로
+    교체 시각을 mpv 에 알려(report_swap) 박자에 맞춰 내보낸다. 맥(Qt + CAOpenGLLayer, ProMotion 가변 주사율)은
+    교체 시각이 고르지 않아(실측 120Hz 화면에서 추정 109~113Hz, 흔들림 0.4~0.9) 오히려 나빠져 끈다.
+    """
+    return platform.startswith("win")
+
+
+def sync_trouble(display_fps: float | None, estimated_fps: float | None, jitter: float | None) -> str:
+    """화면 박자 맞춤이 이 PC 에서 제대로 안 되는지 (되면 ""). 화면 교체가 모니터 박자에 묶여 있지 않으면
+    mpv 의 추정 주사율이 실제와 다르거나 흔들림이 커서, 박자 맞춤이 오히려 끊김을 만든다."""
+    if display_fps and estimated_fps and abs(estimated_fps - display_fps) / display_fps > 0.05:
+        return f"모니터 {display_fps:.0f}Hz 인데 화면 교체가 {estimated_fps:.0f}Hz 로 잡힘"
+    if jitter is not None and jitter > 0.25:      # 잘 되는 화면은 0.01~0.1
+        return f"화면 교체 흔들림이 큼 ({jitter:.2f})"
+    return ""
+
+
 def platform_options(platform: str = sys.platform) -> dict[str, Any]:
     """운영체제별로 더하는 mpv 옵션."""
     if platform.startswith("win"):
@@ -132,7 +153,7 @@ class MpvWidget(QOpenGLWidget):
 
     def __init__(self, parent=None, *, ytdl_path: str | None = None, js_runtime: str | None = None,
                  stream_max_height: int = 2160, vr_hq: bool = True, vr_max_magnification: float = 3.0,
-                 hwdec_mode: str = "auto"):
+                 hwdec_mode: str = "auto", display_sync: bool | None = None):
         super().__init__(parent)
         fmt = QSurfaceFormat()
         fmt.setVersion(3, 3)
@@ -143,6 +164,10 @@ class MpvWidget(QOpenGLWidget):
         self.setMouseTracking(True)
         self.setMinimumSize(320, 180)
 
+        if display_sync is None:
+            display_sync = display_sync_default()
+        self.display_sync = bool(display_sync)
+        self.sync_fallback = ""            # 박자 맞춤을 저절로 끈 까닭 (환경 정보에 표시)
         opts: dict[str, Any] = {
             "vo": "libmpv",
             "hwdec": hwdec_value(hwdec_mode),
@@ -158,7 +183,12 @@ class MpvWidget(QOpenGLWidget):
             "demuxer_max_bytes": "800MiB",
             "demuxer_max_back_bytes": "200MiB",
             "sub_auto": "fuzzy",
-            "video_sync": "audio",
+            # 화면 박자 맞춤 (2026-11-20 사용자 신고: 윈도우에서 미디어 플레이어보다 끊기는 느낌).
+            # 'audio' 는 영상 시계로만 내보내 모니터 주사율(60Hz)과 한 박자씩 어긋났다(맥 120Hz 실측 26%).
+            # display-resample: 모니터 박자에 맞춰 프레임을 내보내고 소리를 0.1% 안팎으로 맞춘다.
+            # 화면 교체 시각은 frameSwapped → report_swap, 주사율은 display-fps-override 로 알려 준다.
+            "video_sync": os.environ.get("CLASSPLAYER_VIDEO_SYNC",
+                                         "display-resample" if display_sync else "audio"),
             "volume_max": 150,
         }
         opts.update(platform_options())
@@ -212,7 +242,9 @@ class MpvWidget(QOpenGLWidget):
         self.video_size_changed.connect(self._set_video_size)
 
         m = self.mpv
-        m.observe_property("time-pos", lambda _n, v: self.position_changed.emit(float(v or 0.0)))
+        # 재생 위치는 초당 약 8번만 알린다 (매 프레임 알리면 화면 그리기 쪽 메인 스레드가 바빠져 박자가 흔들림)
+        self._pos_last = (-10.0, 0.0)          # (보낸 위치, 보낸 시각)
+        m.observe_property("time-pos", self._on_time_pos)
         m.observe_property("duration", lambda _n, v: self.duration_changed.emit(float(v or 0.0)))
         m.observe_property("pause", lambda _n, v: self.pause_changed.emit(bool(v)))
         m.observe_property("dwidth", self._on_dims)
@@ -271,6 +303,77 @@ class MpvWidget(QOpenGLWidget):
 
     def _on_mpv_update(self) -> None:
         self._request_update.emit()
+
+    def _on_time_pos(self, _name: str, v: Any) -> None:
+        import time as _time
+        pos = float(v or 0.0)
+        last_pos, last_t = self._pos_last
+        now = _time.monotonic()
+        if now - last_t >= 0.12 or abs(pos - last_pos) > 0.5 or pos == 0.0:
+            self._pos_last = (pos, now)
+            self.position_changed.emit(pos)
+
+    def _on_frame_swapped(self) -> None:
+        """화면이 실제로 바뀐 순간을 mpv 에 알린다 (박자 맞춤의 기준). 박자 맞춤을 끈 맥에서는 알리지 않는다
+        (맥은 교체 시각이 고르지 않아 알리면 영상 시계 방식도 흔들렸다)."""
+        if self.ctx is not None and self.display_sync and not self.sync_fallback:
+            try:
+                self.ctx.report_swap()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def update_display_fps(self, *_a) -> None:
+        """지금 창이 있는 모니터의 주사율을 mpv 에 알린다 (모니터를 옮기거나 주사율이 바뀌면 다시)."""
+        try:
+            scr = self.screen()
+            hz = float(scr.refreshRate()) if scr is not None else 0.0
+            if 20.0 <= hz <= 500.0:
+                self.mpv["display-fps-override"] = hz
+                self.display_hz = hz
+        except Exception:  # noqa: BLE001
+            pass
+
+    def set_display_sync(self, on: bool) -> None:
+        """화면 박자 맞춤 켜기/끄기 (재생 중에도 바로)."""
+        self.display_sync = bool(on)
+        self.sync_fallback = ""
+        try:
+            self.mpv["video-sync"] = "display-resample" if on else "audio"
+        except Exception as e:  # noqa: BLE001
+            self.log_message.emit("warn", "sync", f"화면 박자 맞춤 바꾸기 실패: {e}")
+        if on:
+            self.update_display_fps()
+
+    def check_display_sync(self) -> str:
+        """재생 몇 초 뒤 부른다: 이 PC 에서 박자 맞춤이 제대로 안 되면 영상 시계 방식으로 돌아가고 까닭을 돌려준다."""
+        if not self.display_sync or self.sync_fallback:
+            return ""
+        why = sync_trouble(self.property("display-fps"), self.property("estimated-display-fps"),
+                           self.property("vsync-jitter"))
+        if why:
+            self.sync_fallback = why
+            try:
+                self.mpv["video-sync"] = "audio"
+            except Exception:  # noqa: BLE001
+                pass
+            self.log_message.emit("warn", "sync", f"화면 박자 맞춤을 끔: {why}")
+        return why
+
+    def _watch_screen(self) -> None:
+        win = self.window().windowHandle() if self.window() else None
+        if win is None or getattr(self, "_screen_watched", None) is win:
+            return
+        self._screen_watched = win
+        win.screenChanged.connect(self._on_screen_changed)
+        self._on_screen_changed(win.screen())
+
+    def _on_screen_changed(self, scr) -> None:
+        if scr is not None:
+            try:
+                scr.refreshRateChanged.connect(self.update_display_fps)
+            except Exception:  # noqa: BLE001
+                pass
+        self.update_display_fps()
 
     # ------------------------------------------------------------------ 재생 제어
     @property
@@ -636,6 +739,10 @@ class MpvWidget(QOpenGLWidget):
         self.ctx.update_cb = self._on_mpv_update
         if os.environ.get("CLASSPLAYER_BLOCK_TARGET", "1") == "0":
             self.ctx.block_for_target_time = False
+        self.display_hz = 0.0
+        if os.environ.get("CLASSPLAYER_REPORT_SWAP", "1") != "0":
+            self.frameSwapped.connect(self._on_frame_swapped)
+            self._watch_screen()
         try:
             self._max_tex = int(GL.glGetIntegerv(GL.GL_MAX_TEXTURE_SIZE))
         except Exception:  # noqa: BLE001

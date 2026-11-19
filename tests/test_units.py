@@ -402,3 +402,14 @@ def test_cloud_plan_choices():
     assert cloud_plan(int(127 * MB), 59, 2.4 * MB, 16 * MB, True) == "fetch"         # 짧은 빠듯한 영상: 8초면 끝
     assert cloud_plan(int(2600 * MB), 1000, 2.9 * MB, 12 * MB, True) == "stream_full"  # 긴 빠듯한 영상
     assert cloud_plan(0, 0, 3 * MB, 12 * MB, True) == "stream"
+
+
+def test_display_sync_rules():
+    """화면 박자 맞춤: 윈도우만 기본으로 켜고, 화면 교체가 박자에 안 묶인 PC 면 저절로 끈다."""
+    from classplayer.player.mpv_widget import display_sync_default, sync_trouble
+    assert display_sync_default("win32") and not display_sync_default("darwin")
+    assert sync_trouble(60.0, 59.94, 0.03) == ""                       # 잘 되는 윈도우 60Hz
+    assert sync_trouble(144.0, 143.9, 0.08) == ""
+    assert "Hz" in sync_trouble(120.0, 109.5, 0.4)                       # 맥 실측 (교체가 박자에 안 묶임)
+    assert "흔들림" in sync_trouble(60.0, 59.9, 0.6)
+    assert sync_trouble(None, None, None) == ""                          # 아직 모름 → 그대로

@@ -992,7 +992,7 @@ class MainWindow(QMainWindow):
             ytdl_path=self.ytdlp, js_runtime=self.js_runtime,
             stream_max_height=self.settings.stream_max_height,
             vr_hq=self.settings.vr_hq, vr_max_magnification=self.settings.vr_max_magnification,
-            hwdec_mode=self.settings.hwdec_mode,
+            hwdec_mode=self.settings.hwdec_mode, display_sync=self.settings.display_sync,
         )
         self.player.set_volume(self.settings.volume)
         if self.settings.audio_device and self.settings.audio_device != "auto":
@@ -1497,6 +1497,10 @@ class MainWindow(QMainWindow):
             self.m_hwdec.addAction(a)
             self.a_hwdec[mode] = a
         self.m_hwdec.setToolTipsVisible(True)
+        self.a_display_sync = act(m_set, "화면 박자 맞춤 (부드러운 재생)", self._set_display_sync, checkable=True,
+                                  checked=self.player.display_sync)
+        self.a_display_sync.setToolTip("모니터 주사율에 맞춰 프레임을 내보내 끊김 없이 보이게 합니다. "
+                                       "화면이 오히려 이상하면 끄세요")
         m_set.addSeparator()
         act(m_set, "기본 영상 플레이어로 등록…", self.register_default_player)
 
@@ -2764,6 +2768,8 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(4000, lambda: p == self._current and not self._cloud_job and self._probe_local(p))
         self._update_info()
         QTimer.singleShot(600, self._show_hud_info)
+        if self.player.display_sync:
+            QTimer.singleShot(6000, lambda p=self._current: self._check_display_sync(p))
         tracks = self.player.property("track-list", []) or []
         real_video = any(t.get("type") == "video" and not t.get("albumart") and not t.get("image") for t in tracks)
         if not real_video and any(t.get("type") == "audio" for t in tracks):
@@ -2860,6 +2866,19 @@ class MainWindow(QMainWindow):
     def _popup_hwdec_menu(self) -> None:
         from PySide6.QtGui import QCursor
         self.m_hwdec.popup(QCursor.pos())
+
+    def _set_display_sync(self, on: bool) -> None:
+        self.settings.display_sync = on
+        self.player.set_display_sync(on)
+        self.notify("화면 박자 맞춤을 켰습니다 (모니터 주사율에 맞춰 내보냄)" if on else "화면 박자 맞춤을 껐습니다")
+
+    def _check_display_sync(self, path: str) -> None:
+        """재생 6초 뒤: 이 PC 에서 화면 박자 맞춤이 제대로 안 되면 저절로 끈다 (상태줄에만 알림)."""
+        if path != self._current or self._music_on or bool(self.player.property("pause", True)):
+            return
+        why = self.player.check_display_sync()
+        if why:
+            self.statusBar().showMessage(f"화면 박자 맞춤을 이 컴퓨터에서는 쓰지 않습니다 ({why})", 8000)
 
     def _set_hwdec_mode(self, mode: str) -> None:
         self.settings.hwdec_mode = mode
@@ -3228,6 +3247,11 @@ class MainWindow(QMainWindow):
                 f"버린 프레임: {P.property('frame-drop-count', 0)} (디코더 {P.property('decoder-frame-drop-count', 0)}), "
                 f"늦게 그린 프레임: {P.property('vo-delayed-frame-count', 0)}",
                 f"하드웨어 디코딩 오류: {P.hwdec_errors}번",
+                "화면 박자: " + (f"맞춤 (모니터 {P.property('display-fps', 0) or 0:.0f}Hz, 실제 교체 "
+                                 f"{P.property('estimated-display-fps', 0) or 0:.1f}Hz, 흔들림 "
+                                 f"{P.property('vsync-jitter', 0) or 0:.2f}, 박자 놓친 프레임 "
+                                 f"{P.property('mistimed-frame-count', 0)})" if P.display_sync and not P.sync_fallback
+                                 else f"영상 시계 ({P.sync_fallback or '설정에서 끔'})"),
                 f"소리 출력: {P.property('current-ao', '') or '?'}",
             ]
             r = P.cloud.current if P.cloud else None
@@ -3904,6 +3928,9 @@ def _run_selftest(app: QApplication, win: "MainWindow", target: str) -> None:
         info_ok = (info.get("time-pos") or 0) > 2
 
         # 드라이브 방식(cpcloud://, 앱 조각 받기)으로도 같은 파일이 열리는지 — 윈도우 libmpv 의 스트림 콜백 확인
+        info["sync"] = {"video-sync": p.property("video-sync"), "display-fps": p.property("display-fps"),
+                        "estimated": p.property("estimated-display-fps"), "jitter": p.property("vsync-jitter"),
+                        "fallback": p.sync_fallback, "on": p.display_sync}
         info["current"] = win._current
         info["side_collapsed"] = not any(d.isVisible() for d in win._left_docks.values())
         src = win._current if target == "argv" else target
