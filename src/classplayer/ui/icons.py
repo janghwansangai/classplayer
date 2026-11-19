@@ -28,6 +28,11 @@ _PATHS: dict[str, str] = {
     "link": '<path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/>',
     "download": '<path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>',
     "folder": '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+    # 옆 막대: 라이브러리(영상 묶음), 자동 받기(내려받기 + 되풀이)
+    "library": '<rect x="3" y="7" width="15" height="13" rx="2"/><path d="M6 4h13a2 2 0 0 1 2 2v11"/>'
+               '<path d="M9 11v5l4-2.5z" fill="C" stroke="none"/>',
+    "autodl": '<path d="M12 3v9m0 0l-3.5-3.5M12 12l3.5-3.5M4 15v3a2 2 0 0 0 2 2h7"/>'
+              '<path d="M21 15.5a3.5 3.5 0 1 1-1-2.45M21 11.5v2.3h-2.3"/>',
     "search": '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',
     "plus": '<path d="M12 5v14M5 12h14"/>',
     "minus": '<path d="M5 12h14"/>',

@@ -164,6 +164,10 @@ class MpvWidget(QOpenGLWidget):
         opts.update(platform_options())
         self.hwdec_mode = hwdec_mode if hwdec_mode in HWDEC_MODES else "auto"
         self.hwdec_errors = 0         # 이 파일에서 하드웨어 디코딩 오류 수 (진단·안내용)
+        self.cloud_target = ""        # 지금 드라이브 방식(cpcloud://)으로 연 파일 (실패하면 앱이 일반 방식으로 다시 연다)
+        # 화면 준비(렌더 컨텍스트)가 생기기 전에 들어온 재생 요청. libmpv 는 그 전에 영상 출력을 시작하면
+        # "No render context set" 으로 영상을 포기한다 (탐색기 '연결 프로그램'으로 열 때 창보다 파일이 먼저 옴)
+        self._pending_play: tuple | None = None
         self.gl_renderer = ""         # 그래픽 카드 이름 (환경 정보)
         script_opts = []
         if ytdl_path:
@@ -289,6 +293,12 @@ class MpvWidget(QOpenGLWidget):
         return False
 
     def play(self, target: str, cloud: bool = False, start: float = 0.0) -> None:
+        if self.ctx is None:
+            self._pending_play = ("play", (target, cloud, start), {})
+            return
+        self._play(target, cloud, start)
+
+    def _play(self, target: str, cloud: bool = False, start: float = 0.0) -> None:
         """로컬 파일이나 일반 URL 재생 (mpv 내장 ytdl 훅 사용).
 
         cloud=True: 아직 이 컴퓨터에 다 받지 않은 드라이브 파일 → 앱의 조각 받기(cpcloud://)로 바로 재생.
@@ -303,6 +313,7 @@ class MpvWidget(QOpenGLWidget):
         self.set_dual_stream(False)
         local = not target.startswith(("http://", "https://"))
         cloud = cloud and local and self.cloud is not None
+        self.cloud_target = target if cloud else ""
         try:
             # 로컬 파일은 디스크에서 바로 읽으므로 큰 버퍼가 필요 없다 (11GB 360 영상에서 메모리 2.3GB → 줄임)
             # 드라이브 파일은 앱이 따로 64MB 를 앞서 받아 두므로 mpv 버퍼는 조금만 더
@@ -332,9 +343,16 @@ class MpvWidget(QOpenGLWidget):
         self.mpv.pause = False
         self.pause_changed.emit(False)
 
-    def play_stream(self, video_url: str, audio_url: str = "", *, title: str = "", user_agent: str = "",
-                    subtitles: list[tuple[str, str, str]] | None = None, start: float = 0.0) -> None:
+    def play_stream(self, video_url: str, audio_url: str = "", **kw) -> None:
         """앱에서 직접 푼 스트림 주소 재생. 영상/소리가 따로 오면 audio-files 로 합친다."""
+        if self.ctx is None:
+            self._pending_play = ("stream", (video_url, audio_url), kw)
+            return
+        self._play_stream(video_url, audio_url, **kw)
+
+    def _play_stream(self, video_url: str, audio_url: str = "", *, title: str = "", user_agent: str = "",
+                     subtitles: list[tuple[str, str, str]] | None = None, start: float = 0.0) -> None:
+        self.cloud_target = ""
         self._reset_stream_options()
         try:
             self.mpv["demuxer-max-bytes"] = "800MiB"
@@ -634,6 +652,12 @@ class MpvWidget(QOpenGLWidget):
         except Exception as e:  # noqa: BLE001
             self._vr_ok = False
             self.log_message.emit("error", "vr", f"셰이더 초기화 실패: {e}")
+        if self._pending_play is not None:
+            kind, args, kw = self._pending_play
+            self._pending_play = None
+            # 렌더 컨텍스트가 생긴 다음 이벤트에서 재생 (initializeGL 안에서 바로 열지 않는다)
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, lambda: (self._play if kind == "play" else self._play_stream)(*args, **kw))
 
     def _compile(self, kind: int, src: str) -> int:
         sh = GL.glCreateShader(kind)

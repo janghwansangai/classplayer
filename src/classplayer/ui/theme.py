@@ -137,6 +137,10 @@ QListWidget#searchlist {{ background: transparent; border: none; outline: 0; }}
 QListWidget#searchlist::item {{ border-radius: 10px; padding: 4px 6px; color: {TEXT}; }}
 QListWidget#searchlist::item:hover {{ background: #24252c; }}
 QListWidget#searchlist::item:selected {{ background: {AMBER_DIM}; color: {TEXT}; }}
+QToolBar#siderail {{ background: {TOP}; border: none; border-right: 1px solid {LINE}; padding: 8px 5px; spacing: 6px; }}
+QToolBar#siderail QToolButton {{ border: none; border-radius: 10px; min-width: 40px; min-height: 40px; background: transparent; }}
+QToolBar#siderail QToolButton:hover {{ background: {RAISED}; }}
+QToolBar#siderail QToolButton:checked {{ background: {AMBER_DIM}; }}
 QFrame#banner {{ background: #221c0e; border-bottom: 1px solid #4a3a12; }}
 QFrame#banner QLabel {{ color: {AMBER_HOVER}; }}
 """

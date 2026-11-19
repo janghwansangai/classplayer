@@ -110,6 +110,26 @@ jobs:
           $env:CLASSPLAYER_SELFTEST = "$PWD\selftest.mp4"
           & dist\ClassPlayer\ClassPlayer.exe | Tee-Object -Variable out
           Write-Host $out
+      - name: 탐색기 '연결 프로그램' 처럼 열기 (파일 인자, 한글·띄어쓰기 경로, 다른 작업 폴더)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $d = Join-Path $env:RUNNER_TEMP "한글 폴더"
+          New-Item -ItemType Directory -Force $d | Out-Null
+          $f = Join-Path $d "수업 영상.mp4"
+          Copy-Item selftest.mp4 $f
+          $exe = (Resolve-Path dist\ClassPlayer\ClassPlayer.exe).Path
+          $env:CLASSPLAYER_SELFTEST = "argv"
+          Push-Location C:\Windows\System32
+          $out = & $exe $f
+          Pop-Location
+          Write-Host $out
+          $line = ($out | Select-String 'SELFTEST (.*)').Matches[0].Groups[1].Value
+          $j = $line | ConvertFrom-Json
+          "time-pos=$($j.'time-pos') side_collapsed=$($j.side_collapsed) current=$($j.current) cloud=$($j.cloud | ConvertTo-Json -Compress)"
+          if ($j.'time-pos' -lt 2) { throw "파일 인자로 연 영상이 재생되지 않음" }
+          if (-not $j.side_collapsed) { throw "파일로 열었는데 옆 창이 접히지 않음" }
+          if (-not $j.current.EndsWith("수업 영상.mp4")) { throw "다른 파일이 열림: $($j.current)" }
       - name: 압축
         shell: pwsh
         run: Compress-Archive -Path dist\ClassPlayer -DestinationPath ClassPlayer-windows-x64.zip

@@ -17,7 +17,8 @@ from PySide6.QtGui import (QAction, QActionGroup, QCloseEvent, QColor, QDesktopS
 from PySide6.QtWidgets import (QAbstractSpinBox, QButtonGroup, QFrame, QApplication, QCheckBox, QComboBox, QDialog,
                                QDialogButtonBox, QDockWidget, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
                                QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QProgressDialog, QPushButton,
-                               QRadioButton, QScrollArea, QStackedWidget, QTextEdit, QToolButton, QVBoxLayout, QWidget)
+                               QRadioButton, QScrollArea, QSizePolicy, QStackedWidget, QTextEdit, QToolBar, QToolButton,
+                               QVBoxLayout, QWidget)
 
 from classplayer import __version__, bootstrap
 from classplayer.bootstrap import APP_NAME, AUDIO_EXTENSIONS, MEDIA_EXTENSIONS
@@ -41,7 +42,7 @@ from classplayer.player.mpv_widget import MpvWidget
 from classplayer.player.thumbnails import ThumbnailProvider
 from classplayer.player.controls import fmt_time
 from classplayer.settings import Settings
-from classplayer.ui.theme import QSS, apply_palette
+from classplayer.ui.theme import AMBER, QSS, apply_palette
 from classplayer.youtube.common import is_url, is_youtube_url, start_seconds, youtube_video_id
 from classplayer.youtube.download import PRESETS, DownloadJob, DownloadRequest
 from classplayer.youtube.probe import probe_spherical
@@ -1164,6 +1165,7 @@ class MainWindow(QMainWindow):
         self.dock_downloads.setWidget(self.downloads)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock_downloads)
         self.dock_downloads.hide()
+        self._build_side_rail()
 
         # 자동 받기 실행기: 받을 목록을 앞에서부터 하나씩 (기존 미리 받기 작업으로, 다운로드 창에 진행 표시)
         self.autodl = AutoDownloader(self.autodl_store, self._make_auto_job, self._auto_wait_reason,
@@ -1453,10 +1455,13 @@ class MainWindow(QMainWindow):
             a = act(m_mag, label, lambda _c, v=val: self._set_max_mag(v), checkable=True, checked=abs(cur - val) < 0.01)
             g3.addAction(a)
         m_view.addSeparator()
-        m_view.addAction(self.dock_library.toggleViewAction())
-        m_view.addAction(self.dock_downloads.toggleViewAction())
-        self.dock_library.toggleViewAction().setShortcut(QKeySequence("Ctrl+1"))
-        self.dock_downloads.toggleViewAction().setShortcut(QKeySequence("Ctrl+2"))
+        act(m_view, "라이브러리 펼치기·접기", lambda: self.toggle_side("library"), "Ctrl+1")
+        act(m_view, "재생목록 펼치기·접기", lambda: self.toggle_side("playlist"))
+        act(m_view, "자동 받기 펼치기·접기", lambda: self.toggle_side("autodl"))
+        act(m_view, "다운로드 창 보이기·숨기기", self._toggle_downloads, "Ctrl+2")
+        act(m_view, "옆 창 접기", lambda: self.collapse_side(), "Ctrl+\\")
+        self.a_side_auto = act(m_view, "재생을 시작하면 옆 창 접기", self._set_side_autocollapse, checkable=True,
+                               checked=self.settings.q.value("view/side_autocollapse", True, type=bool))
         act(m_view, "라이브러리 검색", self._focus_search, "Ctrl+Shift+F")
 
         m_set = mb.addMenu("설정")
@@ -1567,6 +1572,8 @@ class MainWindow(QMainWindow):
         if not is_url(target) and not Path(target).exists():
             QMessageBox.warning(self, APP_NAME, f"파일을 찾을 수 없습니다:\n{target}")
             return
+        if not self._advancing and self.settings.q.value("view/side_autocollapse", True, type=bool):
+            self.collapse_side(remember=False)          # 영상을 크게 (필요하면 옆 막대로 다시 펼침)
         self._current = target
         self._current_is_youtube = is_youtube_url(target)
         self.url_edit.setText(target)
@@ -1622,6 +1629,119 @@ class MainWindow(QMainWindow):
                 self._cloud_probe = ""
                 self._probe_local(target)
         self.player.setFocus()
+
+    # ------------------------------------------------------------------ 옆 창 (펼치기·접기)
+    # 2026-11-19 사용자 요청: 라이브러리 등 왼쪽 창은 필요할 때만 펼친다. 왼쪽 끝 세로 막대의 아이콘을 누르면
+    # 그 창이 펼쳐지고 다시 누르면 접힌다. 한 번에 하나만 (탭 대신 막대로 고른다). 재생을 시작하면 기본으로 접힌다.
+    def _build_side_rail(self) -> None:
+        bar = QToolBar("옆 창", self)
+        bar.setObjectName("siderail")
+        bar.setMovable(False)
+        bar.setFloatable(False)
+        bar.setOrientation(Qt.Orientation.Vertical)
+        bar.setIconSize(QSize(22, 22))
+        bar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        bar.toggleViewAction().setVisible(False)          # 오른쪽 클릭 메뉴로 막대 자체를 숨기지 못하게
+        self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, bar)
+        self.side_rail = bar
+        self._left_docks = {"library": self.dock_library, "playlist": self.dock_playlist, "autodl": self.dock_autodl}
+        self._rail_acts: dict[str, QAction] = {}
+        for key, ico, name, keys in (("library", "library", "라이브러리", " (⌘1)"), ("playlist", "list", "재생목록", ""),
+                                      ("autodl", "autodl", "자동 받기", "")):
+            a = QAction(icons.icon(ico, "#9a9daa", AMBER, 22), name, self)
+            a.setCheckable(True)
+            a.setToolTip(bootstrap.keys(f"{name}{keys} — 누르면 펼치고, 다시 누르면 접습니다"))
+            a.triggered.connect(lambda _c=False, k=key: self.toggle_side(k))
+            bar.addAction(a)
+            self._rail_acts[key] = a
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        spacer.setStyleSheet("background: transparent;")
+        bar.addWidget(spacer)
+        a = QAction(icons.icon("download", "#9a9daa", AMBER, 22), "다운로드", self)
+        a.setCheckable(True)
+        a.setToolTip(bootstrap.keys("다운로드 진행 창 (⌘2) — 미리 받기·녹화 진행 상황"))
+        a.triggered.connect(lambda _c=False: self._toggle_downloads())
+        bar.addAction(a)
+        self._rail_acts["downloads"] = a
+        for d in (*self._left_docks.values(), self.dock_downloads):
+            d.visibilityChanged.connect(lambda _v: QTimer.singleShot(0, self._update_rail))
+        self._advancing = False     # 이전·다음·자동 다음 영상으로 넘어가는 중 (이땐 옆 창을 건드리지 않음)
+        last = str(self.settings.q.value("view/side_panel", "library") or "")
+        if last in self._left_docks:
+            self.show_side(last, remember=False)
+        else:
+            self.collapse_side(remember=False)
+
+    def toggle_side(self, key: str) -> None:
+        d = self._left_docks[key]
+        if d.isVisible() and not self._fullscreen:
+            self.collapse_side()
+        else:
+            self.show_side(key)
+
+    def show_side(self, key: str, remember: bool = True) -> None:
+        """그 창 하나만 펼친다 (다른 왼쪽 창은 접는다)."""
+        d = self._left_docks[key]
+        if self._fullscreen:
+            for o in self._left_docks.values():
+                self._dock_state[o] = o is d
+        else:
+            for o in self._left_docks.values():
+                if o is not d:
+                    o.hide()
+            d.show()
+            d.raise_()
+        if remember:
+            self.settings.q.setValue("view/side_panel", key)
+        QTimer.singleShot(0, self._update_rail)
+
+    def collapse_side(self, remember: bool = True) -> None:
+        for o in self._left_docks.values():
+            if self._fullscreen:
+                self._dock_state[o] = False
+            else:
+                o.hide()
+        if remember:
+            self.settings.q.setValue("view/side_panel", "")
+        QTimer.singleShot(0, self._update_rail)
+
+    def _toggle_downloads(self) -> None:
+        if self.dock_downloads.isVisible():
+            self.dock_downloads.hide()
+        else:
+            self._show_dock(self.dock_downloads)
+        QTimer.singleShot(0, self._update_rail)
+
+    def _update_rail(self) -> None:
+        acts = getattr(self, "_rail_acts", {})
+        for key, d in getattr(self, "_left_docks", {}).items():
+            if key in acts:
+                acts[key].setChecked(d.isVisible())
+        if "downloads" in acts:
+            acts["downloads"].setChecked(self.dock_downloads.isVisible())
+
+    def _set_side_autocollapse(self, on: bool) -> None:
+        self.settings.q.setValue("view/side_autocollapse", bool(on))
+        self.notify("재생을 시작하면 옆 창을 접습니다" if on else "재생을 시작해도 옆 창을 그대로 둡니다")
+
+    def _advance(self, fn) -> None:
+        """이전·다음·자동 다음: 사용자가 펼쳐 둔 옆 창을 접지 않는다."""
+        self._advancing = True
+        try:
+            fn()
+        finally:
+            self._advancing = False
+
+    def open_external(self, path: str) -> None:
+        """탐색기·Finder '연결 프로그램' 이나 이미 켜진 앱으로 넘겨받은 파일: 옆 창을 접고 창을 앞으로 가져와 재생."""
+        print(f"[open] 바깥에서 연 파일: {path}", file=sys.stderr, flush=True)
+        self.collapse_side(remember=False)
+        if self.isMinimized():
+            self.showNormal()
+        self.raise_()
+        self.activateWindow()
+        self.open_target(path)
 
     # ------------------------------------------------------------------ 클라우드(구글 드라이브 등) 파일
     # 적응형 드라이브 재생 (2026-11-19, 측정값은 player/cloud_stream.py 머리말):
@@ -1838,6 +1958,12 @@ class MainWindow(QMainWindow):
                 else:
                     self.resolver.resolve(cur, clients=clients)
                 return
+        if not is_url(cur) and self.player.cloud_target == cur:
+            # 드라이브 방식(앱 조각 받기)으로 못 열었다 → mpv 가 파일을 직접 읽는 일반 방식으로 한 번 더
+            print(f"[cloud] 드라이브 방식 실패 → 일반 방식으로 다시 ({err})", file=sys.stderr)
+            self._show_loading("다른 방법으로 다시 여는 중…")
+            self.player.play(cur, cloud=False)
+            return
         self._refetching = False
         self.loading.hide()
         if self._current_is_youtube:
@@ -1939,10 +2065,10 @@ class MainWindow(QMainWindow):
             self.library.reveal(self._current)
 
     def play_next(self) -> None:
-        self._play_step(1)
+        self._advance(lambda: self._play_step(1))
 
     def play_prev(self) -> None:
-        self._play_step(-1)
+        self._advance(lambda: self._play_step(-1))
 
     def _play_step(self, delta: int) -> None:
         """재생목록이면 목록 순서, 라이브러리에서 연 것이면 라이브러리에 보이는 순서로 이전·다음."""
@@ -2039,7 +2165,7 @@ class MainWindow(QMainWindow):
 
     def _on_eof(self) -> None:
         if self.playlists.active and not self._fullscreen_seeking():
-            QTimer.singleShot(600, self.playlist_next)
+            QTimer.singleShot(600, lambda: self._advance(self.playlist_next))
 
     def _fullscreen_seeking(self) -> bool:
         return self.controls.slider.isSliderDown()
@@ -3126,6 +3252,7 @@ class MainWindow(QMainWindow):
             self._dock_state = {d: d.isVisible() for d in self.findChildren(QDockWidget)}
             for d in self._dock_state:
                 d.hide()
+            self.side_rail.hide()
             self.url_bar.hide()
             self.banner.hide()
             self.menuBar().hide()
@@ -3147,7 +3274,9 @@ class MainWindow(QMainWindow):
             self.controls.show()
             for d, vis in self._dock_state.items():
                 d.setVisible(vis)
+            self.side_rail.show()
             self._fullscreen = False
+            QTimer.singleShot(0, self._update_rail)
             self.edge.set_suspended(False)
             self.player.setCursor(Qt.CursorShape.OpenHandCursor if self.player.vr_enabled else Qt.CursorShape.ArrowCursor)
 
@@ -3404,8 +3533,12 @@ class MainWindow(QMainWindow):
                 w.setToolTip(bootstrap.keys(t))
 
     def _show_dock(self, dock: QDockWidget) -> None:
-        QTimer.singleShot(0, self._apply_tab_tips)
         """도크를 보이게 한다. 전체화면 중이면 지금은 숨긴 채로 두고 전체화면을 끝낼 때 보이게 한다."""
+        QTimer.singleShot(0, self._apply_tab_tips)
+        for key, d in getattr(self, "_left_docks", {}).items():
+            if d is dock:                       # 왼쪽 창은 옆 막대로 하나씩
+                self.show_side(key)
+                return
         if self._fullscreen:
             self._dock_state[dock] = True
             return
@@ -3588,6 +3721,89 @@ class MainWindow(QMainWindow):
         super().closeEvent(e)
 
 
+def _instance_name() -> str:
+    """이미 켜진 ClassPlayer 와 이야기할 통로 이름 (사용자마다 따로)."""
+    import getpass
+    import re
+    try:
+        user = getpass.getuser()
+    except Exception:  # noqa: BLE001
+        user = "user"
+    return "ClassPlayer-" + re.sub(r"[^A-Za-z0-9_.-]", "_", user)[:40]
+
+
+def _send_to_running(paths: list[str]) -> bool:
+    """이미 켜진 ClassPlayer 가 있으면 파일을 넘기고 True (탐색기 '연결 프로그램' 이 창을 하나 더 띄우지 않게)."""
+    import json
+    from PySide6.QtNetwork import QLocalSocket
+    sock = QLocalSocket()
+    sock.connectToServer(_instance_name())
+    if not sock.waitForConnected(500):
+        return False
+    sock.write(json.dumps({"open": paths}).encode("utf-8") + b"\n")
+    sock.flush()
+    sock.waitForBytesWritten(1500)
+    sock.disconnectFromServer()
+    return True
+
+
+def _listen_for_others(win: "MainWindow"):
+    """나중에 띄워진 ClassPlayer 가 넘겨주는 파일을 받아 이 창에서 연다."""
+    import json
+    from PySide6.QtNetwork import QLocalServer
+    name = _instance_name()
+    server = QLocalServer(win)
+    QLocalServer.removeServer(name)          # 예전에 비정상 종료로 남은 통로 정리 (켜진 앱이 없을 때만 여기 온다)
+    if not server.listen(name):
+        return None
+    bufs: dict = {}
+
+    def on_conn() -> None:
+        c = server.nextPendingConnection()
+        if c is None:
+            return
+        bufs[c] = b""
+
+        def on_read() -> None:
+            bufs[c] = bufs.get(c, b"") + bytes(c.readAll())
+            if b"\n" not in bufs[c]:
+                return
+            line = bufs.pop(c).split(b"\n", 1)[0]
+            try:
+                paths = json.loads(line.decode("utf-8")).get("open") or []
+            except Exception:  # noqa: BLE001
+                paths = []
+            if paths:
+                win.open_external(paths[0])
+            else:
+                win.showNormal() if win.isMinimized() else None
+                win.raise_()
+                win.activateWindow()
+            c.disconnectFromServer()
+
+        c.readyRead.connect(on_read)
+        c.disconnected.connect(c.deleteLater)
+
+    server.newConnection.connect(on_conn)
+    return server
+
+
+class _FileOpenFilter(QObject):
+    """맥 Finder '다음으로 열기'·파일 더블클릭은 실행 인자가 아니라 열기 이벤트로 온다."""
+
+    def __init__(self, win: "MainWindow") -> None:
+        super().__init__(win)
+        self.win = win
+
+    def eventFilter(self, obj, ev) -> bool:  # noqa: N802
+        if ev.type() == QEvent.Type.FileOpen:
+            path = ev.file() or ev.url().toLocalFile()
+            if path:
+                QTimer.singleShot(0, lambda p=path: self.win.open_external(p))
+            return True
+        return False
+
+
 def main() -> None:
     bootstrap.setup_library_paths()
     bootstrap.trust_os_certificates()
@@ -3604,11 +3820,22 @@ def main() -> None:
     app.setStyle("Fusion")   # 맥/윈도우에서 같은 모양으로 그리기
     apply_palette(app)
     app.setStyleSheet(QSS)
+    args = [a for a in sys.argv[1:] if not a.startswith("-psn_")]   # macOS 가 붙이는 프로세스 인자 제외
+    # 시험 중엔 앱 하나만 띄우기를 끈다 (CLASSPLAYER_INSTANCE_TEST=1 이면 그것도 시험)
+    testing = bool(os.environ.get("CLASSPLAYER_SELFTEST") or (os.environ.get("CLASSPLAYER_TEST_SETTINGS")
+                                                               and not os.environ.get("CLASSPLAYER_INSTANCE_TEST")))
+    if not testing and _send_to_running([os.path.abspath(a) if not is_url(a) else a for a in args]):
+        sys.exit(0)                          # 이미 켜진 창에서 연다
     icon_path = (bootstrap.bundled_dir() or Path(__file__).resolve().parent) / "assets" / "icon.png"
     if icon_path.exists():
         from PySide6.QtGui import QIcon
         app.setWindowIcon(QIcon(str(icon_path)))
     win = MainWindow()
+    if args:
+        win.collapse_side(remember=False)    # 파일로 열면 옆 창은 접은 채로 영상만
+    if not testing:
+        win._instance_server = _listen_for_others(win)
+    app.installEventFilter(_FileOpenFilter(win))
     win.show()
     # 처음 실행(또는 안내 내용이 바뀐 뒤 첫 실행)에는 이용 안내를 확인받는다. 거절하면 끝낸다.
     st = win.settings
@@ -3623,9 +3850,9 @@ def main() -> None:
         # 지난 업데이트 때 잠겨 있어 비켜 둔 옛 파일(*.cpold) 지우기
         from classplayer.update_apply import cleanup_old_files
         threading.Thread(target=cleanup_old_files, args=(Path(sys.executable).resolve().parent,), daemon=True).start()
-    args = [a for a in sys.argv[1:] if not a.startswith("-psn_")]   # macOS 가 붙이는 프로세스 인자 제외
     if args:
-        win.open_target(args[0])
+        # 창이 처음 그려진 뒤에 연다 (영상 출력 준비 전에 열면 libmpv 가 영상을 포기할 수 있다)
+        QTimer.singleShot(0, lambda: win.open_external(args[0]))
     selftest = os.environ.get("CLASSPLAYER_SELFTEST")
     if selftest:
         _run_selftest(app, win, selftest)
@@ -3636,7 +3863,8 @@ def _run_selftest(app: QApplication, win: "MainWindow", target: str) -> None:
     """패키징 검증용: 파일을 열고 6초 뒤 상태를 JSON 으로 출력하고 종료한다."""
     import json
 
-    win.open_target(target)
+    if target != "argv":
+        win.open_target(target)
 
     def report() -> None:
         p = win.player
@@ -3676,11 +3904,14 @@ def _run_selftest(app: QApplication, win: "MainWindow", target: str) -> None:
         info_ok = (info.get("time-pos") or 0) > 2
 
         # 드라이브 방식(cpcloud://, 앱 조각 받기)으로도 같은 파일이 열리는지 — 윈도우 libmpv 의 스트림 콜백 확인
-        if is_url(target) or not p.cloud:
+        info["current"] = win._current
+        info["side_collapsed"] = not any(d.isVisible() for d in win._left_docks.values())
+        src = win._current if target == "argv" else target
+        if not src or is_url(src) or not p.cloud:
             info["cloud"] = "건너뜀"
             finish(info, info_ok)
             return
-        p.play(target, cloud=True)
+        p.play(src, cloud=True)
 
         def cloud_report() -> None:
             r = p.cloud.current if p.cloud else None
@@ -3691,7 +3922,8 @@ def _run_selftest(app: QApplication, win: "MainWindow", target: str) -> None:
         QTimer.singleShot(5000, cloud_report)
 
     def finish(info: dict, ok: bool) -> None:
-        print("SELFTEST " + json.dumps(info, ensure_ascii=False, default=str), flush=True)
+        # 윈도우 묶음 앱의 표준 출력은 cp1252 일 수 있어 한글 경로가 섞이면 print 가 실패한다 → \uXXXX 로
+        print("SELFTEST " + json.dumps(info, ensure_ascii=True, default=str), flush=True)
         win.close()
         app.exit(0 if ok else 1)
 
