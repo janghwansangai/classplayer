@@ -36,6 +36,7 @@ from classplayer.vr.stitch import StitchParams, auto_align, grab_frames, identif
 from classplayer.updater import RELEASES_PAGE, Updater, can_self_install, is_newer
 from classplayer.library.library import LibraryPanel
 from classplayer.player.controls import ControlBar
+from classplayer.player.cloud_stream import can_fetch_whole_fast, cloud_plan, fetch_whole_fast
 from classplayer.player.mpv_widget import MpvWidget
 from classplayer.player.thumbnails import ThumbnailProvider
 from classplayer.player.controls import fmt_time
@@ -401,6 +402,10 @@ class _ProbeNotifier(QObject):
     result = Signal(str, object)
 
 
+class _CloudNotifier(QObject):
+    fetched = Signal(str, bool, float, str)     # 경로, 성공, 걸린 초, 오류
+
+
 class _CoverNotifier(QObject):
     ready = Signal(str, bytes)      # 대상(파일/링크), 표지 그림 바이트
 
@@ -409,11 +414,6 @@ class _StitchNotifier(QObject):
     camera = Signal(str, object, bool)          # 경로, CameraInfo, 두 스트림 여부
     aligned = Signal(str, object, float, float, bool)  # 경로, StitchParams, 처음 오차, 최종 오차, 사용자가 누름
     failed = Signal(str, str)
-
-
-class _CopyNotifier(QObject):
-    progress = Signal(int)
-    finished = Signal(str, str)
 
 
 class SeekPreview(QFrame):
@@ -970,9 +970,13 @@ class MainWindow(QMainWindow):
         self._fullscreen = False
         self._dock_state: dict = {}   # 전체화면 들어갈 때 도크별 보임 여부 (QDockWidget → bool)
         self._probe = _ProbeNotifier()
-        self._copy_sig = _CopyNotifier()
-        self._copy_sig.progress.connect(self._on_copy_progress)
-        self._copy_sig.finished.connect(self._on_copy_finished)
+        self._cloud_probe = ""          # 드라이브 파일: 첫 화면 뒤에 검사할 경로
+        self._cloud_timer = QTimer(self)  # '끝까지 받아 두기' 진행 표시
+        self._cloud_timer.setInterval(1000)
+        self._cloud_timer.timeout.connect(self._cloud_progress)
+        self._cloud_job: dict | None = None   # 통째로 받는 중인 파일 (맥 빠른 길)
+        self._cloud_sig = _CloudNotifier()
+        self._cloud_sig.fetched.connect(self._on_cloud_fetched)
         self._probe.result.connect(self._on_probe_result)
         self._stitch_sig = _StitchNotifier()
         self._stitch_sig.camera.connect(self._on_stitch_camera)
@@ -1602,82 +1606,150 @@ class MainWindow(QMainWindow):
             self.resolver.resolve(target)
         else:
             self.resolver.cancel()
-            if bootstrap.is_cloud_placeholder(target) and not self._ask_cloud_file(target):
-                return
+            # 드라이브에서 아직 다 받지 않은 파일: 묻지 않고 바로 재생 (앱이 조각으로 받아 넘긴다).
+            # 예전엔 '내려받고 재생/그냥 재생' 을 묻고, 그냥 재생해도 mpv·ffprobe·미리보기가 같은 파일을 동시에 읽어 느렸다.
+            cloud = bootstrap.is_cloud_file(target)
             self.lbl_title.setText("여는 중…")
-            self._show_loading("여는 중…")
-            self.player.play(target)
-            self._probe_local(target)
+            self._show_loading("드라이브에서 받아 오는 중…" if cloud else "여는 중…")
+            self.player.play(target, cloud=cloud)
+            self._cloud_timer.stop()
+            self._cloud_job = None
+            if cloud:
+                self._cloud_probe = target       # 360 등 검사·속도 판단은 첫 화면이 나온 뒤에 (드라이브 읽기 다툼 방지)
+                self.notify("드라이브 파일: 받아 오면서 바로 재생합니다. 수업 전에 끝까지 받아 두면 인터넷 없이도 재생됩니다",
+                            7000, "끝까지 받아 두기", self._cloud_keep)
+            else:
+                self._cloud_probe = ""
+                self._probe_local(target)
         self.player.setFocus()
 
     # ------------------------------------------------------------------ 클라우드(구글 드라이브 등) 파일
-    def _ask_cloud_file(self, path: str) -> bool:
-        """아직 내려받지 않은 드라이브 파일: 먼저 내려받을지 묻는다. True면 그냥 재생."""
-        size_gb = os.path.getsize(path) / (1 << 30)
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Icon.Question)
-        box.setWindowTitle("드라이브 파일")
-        box.setText(f"이 파일은 아직 이 컴퓨터에 내려받지 않은 드라이브 파일입니다 ({size_gb:.1f} GB).")
-        box.setInformativeText("그대로 재생하면 드라이브에서 받아 오면서 틀기 때문에 자주 멈추고 탐색이 느립니다.\n"
-                               "수업 전에 미리 내려받아 두는 것을 권합니다 (다운로드 폴더에 복사됩니다).")
-        b_dl = box.addButton("내려받고 재생", QMessageBox.ButtonRole.AcceptRole)
-        b_play = box.addButton("그냥 재생", QMessageBox.ButtonRole.ActionRole)
-        box.addButton("취소", QMessageBox.ButtonRole.RejectRole)
-        box.setDefaultButton(b_dl)
-        box.exec()
-        clicked = box.clickedButton()
-        if clicked is b_dl:
-            self._copy_cloud_file(path)
-            return False
-        return clicked is b_play
+    # 적응형 드라이브 재생 (2026-11-19, 측정값은 player/cloud_stream.py 머리말):
+    #   1) 열면 한 갈래 부분 읽기로 바로 첫 화면 (cloud_stream.CloudReader, 다른 읽기 없음)
+    #   2) 길이를 알게 되면(file-loaded) 영상에 필요한 속도와 드라이브 부분 읽기 속도를 비교
+    #   3) 모자라면: 맥은 첫 화면에서 잠깐 멈추고 빠른 길(clonefile)로 통째로 받은 뒤 그 자리부터 로컬로 재생,
+    #      윈도우는 재생을 이어 가며 뒤에서 끝까지 받기 (중간에 잠깐씩 멈출 수 있음)
+    def _cloud_full_rate(self) -> float:
+        """맥 통째로 받기 속도 (바이트/초). 실측을 기억해 남은 시간 예상에 쓴다. 처음엔 12MB/s."""
+        try:
+            return max(1e6, float(self.settings.q.value("cloud/full_rate", 12e6)))
+        except (TypeError, ValueError):
+            return 12e6
 
-    def _copy_cloud_file(self, src: str) -> None:
-        dst_dir = Path(self.settings.download_dir)
-        dst_dir.mkdir(parents=True, exist_ok=True)
-        dst = dst_dir / Path(src).name
-        if dst.exists() and dst.stat().st_size == os.path.getsize(src) and not bootstrap.is_cloud_placeholder(str(dst)):
-            self.open_target(str(dst))
+    def _cloud_decide(self, path: str) -> None:
+        """첫 화면 뒤: 드라이브 부분 읽기 속도로 끊김 없이 볼 수 있는지 판단한다."""
+        if path != self._current or not self.player.cloud:
             return
-        self._current = ""
-        self.lbl_title.setText("드라이브에서 내려받는 중…")
-        self._show_loading("드라이브에서 내려받는 중… 0%")
-        total = max(1, os.path.getsize(src))
-        tmp = dst.with_suffix(dst.suffix + ".part")
+        dur = float(self.player.property("duration", 0.0) or 0.0)
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            return
+        if dur <= 0:
+            return
+        r = self.player.cloud.reader_for(path)
+        have = r.rate() if r else 3e6                       # 드라이브 부분 읽기 실측 (바이트/초)
+        fast = can_fetch_whole_fast() and bootstrap.is_cloud_placeholder(path)
+        plan = cloud_plan(size, dur, have, self._cloud_full_rate(), fast)
+        mbps = size / dur * 8 / 1e6
+        print(f"[cloud] 필요 {mbps:.1f}Mbps, 드라이브 부분 읽기 {have * 8 / 1e6:.1f}Mbps → {plan}", file=sys.stderr)
+        if plan == "fetch":
+            self._cloud_fetch_whole(path, f"고화질 영상({mbps:.0f}Mbps)이라 드라이브에서 한 번에 받는 중…")
+        elif plan == "stream_full" and r is not None:
+            r.start_full()
+            self._cloud_timer.start()
+            self.notify(f"고화질 영상({mbps:.0f}Mbps)이라 인터넷에서 받는 속도가 빠듯합니다. 뒤에서 끝까지 받는 중이라 "
+                        "처음 한 번은 잠깐씩 멈출 수 있습니다", 9000)
+
+    def _cloud_keep(self) -> None:
+        """지금 재생 중인 드라이브 파일을 끝까지 받아 둔다 (드라이브가 이 컴퓨터에 보관 → 인터넷 없이도 재생)."""
+        path = self._current
+        r = self.player.cloud.reader_for(path) if (self.player.cloud and path) else None
+        if self._cloud_job:
+            self.notify("이미 받는 중입니다")
+            return
+        if path and can_fetch_whole_fast() and bootstrap.is_cloud_placeholder(path):
+            self._cloud_fetch_whole(path, "드라이브에서 끝까지 받는 중… (받는 동안 잠깐 멈춥니다)")
+            return
+        if r is None:
+            self.notify("지금 받아 오면서 재생 중인 드라이브 파일이 없습니다")
+            return
+        r.start_full()
+        self._cloud_timer.start()
+        self.notify("끝까지 받아 두는 중입니다. 재생은 그대로 계속됩니다", 4000)
+
+    def _cloud_fetch_whole(self, path: str, text: str) -> None:
+        """맥: 재생을 잠깐 멈추고 드라이브 빠른 길로 통째로 받는다 (다른 읽기가 있으면 드라이브가 느린 길로 가서)."""
+        r = self.player.cloud.reader_for(path) if self.player.cloud else None
+        pos = float(self.player.property("time-pos", 0.0) or 0.0)
+        try:
+            self.player.mpv.pause = True
+        except Exception:  # noqa: BLE001
+            pass
+        if r is not None:
+            r.suspend()
+        size = os.path.getsize(path)
+        self._cloud_job = {"path": path, "pos": pos, "t0": time.monotonic(), "size": size, "text": text,
+                           "est": size / self._cloud_full_rate()}
+        self._cloud_timer.start()
+        self._cloud_progress()
+        cache = os.path.join(os.path.expanduser("~"), "Library", "Caches", "ClassPlayer")
+        sig = self._cloud_sig
 
         def work() -> None:
-            try:
-                done = 0
-                with open(src, "rb") as fi, open(tmp, "wb") as fo:
-                    while True:
-                        chunk = fi.read(8 << 20)
-                        if not chunk:
-                            break
-                        fo.write(chunk)
-                        done += len(chunk)
-                        self._copy_sig.progress.emit(done * 100 // total)
-                os.replace(tmp, dst)
-                self._copy_sig.finished.emit(str(dst), "")
-            except Exception as e:  # noqa: BLE001
-                try:
-                    tmp.unlink(missing_ok=True)
-                except OSError:
-                    pass
-                self._copy_sig.finished.emit("", str(e))
+            if r is not None:
+                r.wait_idle(15)
+            ok, secs, err = fetch_whole_fast(path, cache)
+            sig.fetched.emit(path, bool(ok and not bootstrap.is_cloud_placeholder(path)), secs, err)
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _on_copy_progress(self, pct: int) -> None:
-        self._show_loading(f"드라이브에서 내려받는 중… {pct}%")
-        self.statusBar().showMessage(f"드라이브에서 내려받는 중… {pct}%")
-
-    def _on_copy_finished(self, dst: str, err: str) -> None:
-        self.loading.hide()
-        if err or not dst:
-            self.notify(f"내려받기 실패: {err}", 8000)
+    def _cloud_progress(self) -> None:
+        job = self._cloud_job
+        if job is not None:
+            if job["path"] != self._current:
+                return
+            left = job["est"] - (time.monotonic() - job["t0"])
+            mb = job["size"] / 1e6
+            tail = f"약 {left:.0f}초 남음" if left > 1 else "거의 다 받았습니다"
+            self._show_loading(f"{job['text']}\n{mb:.0f}MB · {tail}")
             return
-        self.notify("내려받기 완료. 라이브러리 다운로드 폴더에 저장했습니다", 5000)
-        self.library.rescan()
-        self.open_target(dst)
+        r = self.player.cloud.reader_for(self._current) if (self.player.cloud and self._current) else None
+        if r is None or not r.full:
+            self._cloud_timer.stop()
+            return
+        pct = int(r.fetched_fraction * 100)
+        if pct >= 100:
+            self._cloud_timer.stop()
+            self.notify("드라이브 파일을 끝까지 받아 두었습니다. 이제 인터넷 없이도 재생됩니다", 6000)
+        else:
+            self.statusBar().showMessage(f"드라이브 파일 받아 두는 중… {pct}%", 2500)
+
+    def _on_cloud_fetched(self, path: str, ok: bool, secs: float, err: str) -> None:
+        job, self._cloud_job = self._cloud_job, None
+        self._cloud_timer.stop()
+        if job is None or path != self._current:
+            return                                          # 그사이 다른 영상을 열었다 (받은 내용은 드라이브에 남음)
+        self.loading.hide()
+        if ok:
+            if secs > 1:
+                old = self._cloud_full_rate()
+                self.settings.q.setValue("cloud/full_rate", 0.5 * old + 0.5 * (job["size"] / secs))
+            # 이제 이 컴퓨터에 있는 파일: 그 자리부터 일반 파일로 다시 연다 (미리보기·검사도 이때)
+            self.player.play(path, start=job["pos"])
+            self._probe_local(path)
+            self.notify(f"드라이브에서 다 받았습니다 ({secs:.0f}초). 이제 끊김 없이 재생합니다", 5000)
+            return
+        r = self.player.cloud.reader_for(path) if self.player.cloud else None
+        if r is not None:
+            r.resume()
+            r.start_full()
+            self._cloud_timer.start()
+        try:
+            self.player.mpv.pause = False
+        except Exception:  # noqa: BLE001
+            pass
+        self.notify(f"한 번에 받지 못해 받아 오면서 재생합니다 ({err or '알 수 없는 오류'})", 7000)
 
     def _on_stream_resolved(self, rs) -> None:
         if rs.url != self._current:
@@ -2095,7 +2167,7 @@ class MainWindow(QMainWindow):
         self._apply_stitch(params or cam.defaults.copy(), save=False)
         if self._stitch_dialog is not None:
             self._stitch_dialog.set_camera(cam.label)
-        if params is None and not bootstrap.is_cloud_placeholder(path):
+        if params is None and not bootstrap.is_cloud_file(path):
             # 이 카메라를 처음 본다: 뒤에서 자동으로 맞춘다
             QTimer.singleShot(1500, lambda p=path: self.auto_stitch(user=False, path=p))
 
@@ -2559,6 +2631,11 @@ class MainWindow(QMainWindow):
             self.notify(self._lowq_note, 6000)
             self._lowq_note = ""
         self._retry_plan = None
+        if self._cloud_probe and self._cloud_probe == self._current:
+            p = self._cloud_probe
+            self._cloud_probe = ""
+            QTimer.singleShot(1500, lambda: self._cloud_decide(p))
+            QTimer.singleShot(4000, lambda: p == self._current and not self._cloud_job and self._probe_local(p))
         self._update_info()
         QTimer.singleShot(600, self._show_hud_info)
         tracks = self.player.property("track-list", []) or []
@@ -3027,6 +3104,12 @@ class MainWindow(QMainWindow):
                 f"하드웨어 디코딩 오류: {P.hwdec_errors}번",
                 f"소리 출력: {P.property('current-ao', '') or '?'}",
             ]
+            r = P.cloud.current if P.cloud else None
+            if r is not None and not r.closed:
+                st = r.stats
+                lines.append(f"드라이브 읽기: 조각 {st['fetched']}개 {st['bytes'] / 1e6:.0f}MB, 다시 읽기 {st['retries']}번, "
+                             f"기다림 {st['waits']}번 {st['wait_secs']:.1f}초, 앞서 받아 둠 {r.buffered_ahead / 1e6:.0f}MB"
+                             + (f", 오류 {len(st['errors'])}" if st["errors"] else ""))
         txt = "\n".join(lines)
         box = QMessageBox(QMessageBox.Icon.Information, "환경 정보", txt, QMessageBox.StandardButton.Ok, self)
         box.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -3590,8 +3673,25 @@ def _run_selftest(app: QApplication, win: "MainWindow", target: str) -> None:
             info["ytdlp_ffmpeg"] = bool(FFmpegFD.available())
         except Exception as e:  # noqa: BLE001
             info["ytdlp_ffmpeg"] = f"error: {e}"
-        print("SELFTEST " + json.dumps(info, ensure_ascii=False), flush=True)
-        ok = (info.get("time-pos") or 0) > 2
+        info_ok = (info.get("time-pos") or 0) > 2
+
+        # 드라이브 방식(cpcloud://, 앱 조각 받기)으로도 같은 파일이 열리는지 — 윈도우 libmpv 의 스트림 콜백 확인
+        if is_url(target) or not p.cloud:
+            info["cloud"] = "건너뜀"
+            finish(info, info_ok)
+            return
+        p.play(target, cloud=True)
+
+        def cloud_report() -> None:
+            r = p.cloud.current if p.cloud else None
+            pos = p.property("time-pos", 0) or 0
+            info["cloud"] = {"time-pos": pos, "w": p.property("video-params/w"),
+                             "fetched": r.stats["fetched"] if r else None, "errors": r.stats["errors"][:3] if r else None}
+            finish(info, info_ok and pos > 1)
+        QTimer.singleShot(5000, cloud_report)
+
+    def finish(info: dict, ok: bool) -> None:
+        print("SELFTEST " + json.dumps(info, ensure_ascii=False, default=str), flush=True)
         win.close()
         app.exit(0 if ok else 1)
 

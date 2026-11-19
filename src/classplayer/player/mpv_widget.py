@@ -23,11 +23,35 @@ from classplayer import bootstrap
 bootstrap.setup_library_paths()
 import mpv  # noqa: E402  (경로 설정 후에 import 해야 libmpv를 찾는다)
 
+from classplayer.player.cloud_stream import CloudStreams  # noqa: E402
 from classplayer.vr.shaders import FRAG_SRC, VERT_SRC  # noqa: E402
 from classplayer.vr.stitch import flat, rot_matrix
 from classplayer.vr.view import VrView  # noqa: E402
 
 DRAG_THRESHOLD_PX = 4
+SUB_EXTS = (".srt", ".smi", ".ass", ".ssa", ".vtt", ".sub")
+
+
+def sibling_subtitles(path: str) -> list[tuple[str, str, str]]:
+    """영상 옆의 같은 이름 자막 파일들 → (언어, 이름, 경로). '영상.ko.srt' 처럼 언어가 붙은 것도."""
+    p = Path(path)
+    out: list[tuple[str, str, str]] = []
+    try:
+        names = os.listdir(p.parent)
+    except OSError:
+        return out
+    stem = p.stem.lower()
+    for n in sorted(names):
+        q = Path(n)
+        if q.suffix.lower() not in SUB_EXTS:
+            continue
+        base = q.stem.lower()
+        if base == stem:
+            out.append(("", n, str(p.parent / n)))
+        elif base.startswith(stem + "."):
+            lang = base[len(stem) + 1:]
+            out.append((lang, n, str(p.parent / n)))
+    return out
 
 # 영상 풀기(디코딩) 방식 — 설정 play/hwdec. 설정 › 영상 풀기 방식 메뉴에서 고른다.
 #   auto   : 권장 (윈도우 = D3D11 로 풀고 복사, 맥 = 그래픽 카드 직접)
@@ -150,6 +174,12 @@ class MpvWidget(QOpenGLWidget):
             opts["ytdl_raw_options"] = f"js-runtimes={js_runtime}"
 
         self.mpv = mpv.MPV(log_handler=self._on_log, loglevel="info", **opts)
+        # 드라이브 파일은 앱이 조각으로 받아 넘긴다 (cpcloud://, player/cloud_stream.py)
+        try:
+            self.cloud: CloudStreams | None = CloudStreams(self.mpv)
+        except Exception as e:  # noqa: BLE001
+            self.cloud = None
+            print(f"[cloud] 드라이브 스트림 등록 실패: {e}")
         self.ctx: mpv.MpvRenderContext | None = None
         self._proc_addr = None
 
@@ -258,17 +288,40 @@ class MpvWidget(QOpenGLWidget):
                 pass
         return False
 
-    def play(self, target: str) -> None:
-        """로컬 파일이나 일반 URL 재생 (mpv 내장 ytdl 훅 사용)."""
+    def play(self, target: str, cloud: bool = False, start: float = 0.0) -> None:
+        """로컬 파일이나 일반 URL 재생 (mpv 내장 ytdl 훅 사용).
+
+        cloud=True: 아직 이 컴퓨터에 다 받지 않은 드라이브 파일 → 앱의 조각 받기(cpcloud://)로 바로 재생.
+        start: 이 위치(초)부터 (드라이브에서 다 받은 뒤 같은 자리에서 다시 열 때)
+        """
         self._reset_stream_options()
+        if start > 0:
+            try:
+                self.mpv["start"] = f"{start:.2f}"
+            except Exception:  # noqa: BLE001
+                pass
         self.set_dual_stream(False)
         local = not target.startswith(("http://", "https://"))
+        cloud = cloud and local and self.cloud is not None
         try:
             # 로컬 파일은 디스크에서 바로 읽으므로 큰 버퍼가 필요 없다 (11GB 360 영상에서 메모리 2.3GB → 줄임)
-            self.mpv["demuxer-max-bytes"] = "150MiB" if local else "800MiB"
+            # 드라이브 파일은 앱이 따로 64MB 를 앞서 받아 두므로 mpv 버퍼는 조금만 더
+            self.mpv["demuxer-max-bytes"] = ("200MiB" if cloud else "150MiB") if local else "800MiB"
             self.mpv["demuxer-max-back-bytes"] = "50MiB" if local else "200MiB"
         except Exception:  # noqa: BLE001
             pass
+        if cloud:
+            try:
+                self.mpv["sub-auto"] = "no"
+                self.mpv["force-media-title"] = Path(target).name
+            except Exception:  # noqa: BLE001
+                pass
+            if not self.has_telemetry_srt(target):
+                self._pending_subs = sibling_subtitles(target)     # 옆 자막은 mpv 가 못 찾으니 직접 붙인다
+            self.mpv.play(self.cloud.url_for(target))
+            self.mpv.pause = False
+            self.pause_changed.emit(False)
+            return
         try:
             # 촬영 기록 SRT 를 자막으로 불러와 화면을 덮지 않게
             self.mpv["sub-auto"] = "no" if (not target.startswith(("http://", "https://"))

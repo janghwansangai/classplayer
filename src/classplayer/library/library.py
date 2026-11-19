@@ -17,7 +17,7 @@ from PySide6.QtGui import QColor, QFont, QIcon, QLinearGradient, QPainter, QPain
 from PySide6.QtWidgets import (QButtonGroup, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QPushButton, QScrollArea, QToolButton, QVBoxLayout, QWidget)
 
-from classplayer.bootstrap import AUDIO_EXTENSIONS, MEDIA_EXTENSIONS, NO_WINDOW, is_cloud_placeholder
+from classplayer.bootstrap import AUDIO_EXTENSIONS, MEDIA_EXTENSIONS, NO_WINDOW, is_cloud_file
 from classplayer.ui import icons
 from classplayer.ui.now_playing import LIBRARY_COLOR, PLAY_ROLE, NowPlayingDelegate
 
@@ -220,7 +220,7 @@ class LibraryThumbs:
         cached = self.get(path)
         if cached:
             return cached
-        if is_cloud_placeholder(path):
+        if is_cloud_file(path):
             return None
         k = self.root / self._key(path)
         dur = 0.0

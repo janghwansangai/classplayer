@@ -319,3 +319,86 @@ def test_preview_plan_heavy_video():
     assert preview_plan(11 * 2**30, 6000.0)[0] == "none"                # 11GB 360 원본
     assert preview_plan(300 * 2**20, 200.0)[0] == "scan"                # 휴대폰 1080p 약 12Mbps
     assert preview_plan(10 * 2**20, 0.0)[0] == "scan"
+
+
+def test_cloud_reader_reads_seeks_and_retries(tmp_path, monkeypatch):
+    """드라이브 읽기 장치: 순서대로·건너뛰어 읽어도 원본과 같고, 드라이브 '시간 초과'는 다시 읽어 넘긴다."""
+    import errno
+    import os as _os
+    import random
+    from classplayer.player import cloud_stream as cs
+    monkeypatch.setattr(cs, "RETRY_DELAY", 0.01)
+    data = random.Random(7).randbytes(1_300_000)
+    f = tmp_path / "v.mp4"
+    f.write_bytes(data)
+    fails = {"n": 0}
+
+    class Flaky:            # 세 번째 읽기마다 ETIMEDOUT (구글 드라이브 실측과 같은 오류)
+        def __init__(self, p):
+            self.f = open(p, "rb", buffering=0)
+            self.k = 0
+
+        def seek(self, o):
+            return self.f.seek(o)
+
+        def readinto(self, b):
+            self.k += 1
+            if self.k % 3 == 0:
+                fails["n"] += 1
+                raise OSError(errno.ETIMEDOUT, "Operation timed out")
+            return self.f.readinto(b)
+
+        def close(self):
+            self.f.close()
+
+    r = cs.CloudReader(str(f), chunk=64 * 1024, opener=Flaky)
+    try:
+        out = bytearray()
+        while True:
+            b = r.read_bytes(50_000)
+            assert b is not None
+            if not b:
+                break
+            out += b
+        assert bytes(out) == data                      # 처음부터 끝까지 그대로
+        assert r.seek(1_000_000) == 1_000_000
+        assert r.read_bytes(10) == data[1_000_000:1_000_010]
+        assert r.seek(5) == 5 and r.read_bytes(3) == data[5:8]   # 뒤로 건너뛰기
+        assert fails["n"] > 0 and r.stats["retries"] >= fails["n"] and not r.stats["errors"]
+        assert r.rate() > 0
+        r.start_full()
+        for _ in range(100):
+            if r.fetched_fraction >= 1.0:
+                break
+            import time as _t
+            _t.sleep(0.05)
+        assert r.fetched_fraction == 1.0                # 끝까지 받아 두기
+    finally:
+        r.close()
+    assert r.read_bytes(10) is None                     # 닫힌 뒤 읽기 = 오류 (mpv 에 -1)
+    assert _os.path.exists(f)
+
+
+def test_windows_google_drive_detection():
+    """윈도우 구글 드라이브 가상 드라이브(G:\\내 드라이브\\…)는 드라이브 파일로 본다. 맥·다른 경로는 아님."""
+    from classplayer.bootstrap import is_windows_drive_stream as w
+    assert w(r"G:\내 드라이브\수업\영상.mp4", "win32", volume_label="")
+    assert w(r"G:\My Drive\a.mp4", "win32", volume_label="")
+    assert w(r"G:\공유 드라이브\6학년\a.mp4", "win32", volume_label="")
+    assert w(r"H:\폴더\a.mp4", "win32", volume_label="Google Drive")
+    assert not w(r"C:\Users\t\Videos\a.mp4", "win32", volume_label="Windows")
+    assert not w(r"D:\내 드라이브.mp4", "win32", volume_label="")          # 맨 위 파일 이름은 아님
+    assert not w(r"\\nas\share\내 드라이브\a.mp4", "win32", volume_label="")
+    assert not w("/Users/t/내 드라이브/a.mp4", "darwin", volume_label="Google Drive")
+
+
+def test_cloud_plan_choices():
+    """드라이브 받는 방식: 가벼우면 그대로, 무거우면 통째로(맥) 또는 뒤에서 끝까지(윈도우), 긴 영상은 그대로+뒤에서."""
+    from classplayer.player.cloud_stream import cloud_plan
+    MB = 1e6
+    assert cloud_plan(int(150 * MB), 600, 3 * MB, 12 * MB, True) == "stream"         # 2Mbps 수업 영상
+    assert cloud_plan(int(1280 * MB), 175, 3 * MB, 16 * MB, True) == "fetch"         # 소니 4K 58Mbps (C0039)
+    assert cloud_plan(int(1280 * MB), 175, 3 * MB, 16 * MB, False) == "stream_full"  # 같은 파일, 윈도우
+    assert cloud_plan(int(127 * MB), 59, 2.4 * MB, 16 * MB, True) == "fetch"         # 짧은 빠듯한 영상: 8초면 끝
+    assert cloud_plan(int(2600 * MB), 1000, 2.9 * MB, 12 * MB, True) == "stream_full"  # 긴 빠듯한 영상
+    assert cloud_plan(0, 0, 3 * MB, 12 * MB, True) == "stream"

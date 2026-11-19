@@ -88,6 +88,11 @@ class ThumbnailProvider(QObject):
             size = Path(path).stat().st_size
         except OSError:
             size = 0
+        from classplayer.bootstrap import is_cloud_file
+        if is_cloud_file(path):
+            # 아직 다 받지 않은 드라이브 파일: ffmpeg 가 파일 전체를 읽으면 재생과 다투고 전부 내려받게 된다
+            self.note = "드라이브 파일 · 재생이 끊기지 않게 미리보기를 쓰지 않습니다"
+            return
         plan, interval = preview_plan(size, duration)
         if plan == "none":
             self.note = "고화질 영상 · 재생이 끊기지 않게 미리보기를 쓰지 않습니다"

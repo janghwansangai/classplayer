@@ -1,6 +1,7 @@
 """실행 환경 준비: libmpv 검색 경로, 외부 도구(yt-dlp, ffmpeg) 위치."""
 from __future__ import annotations
 
+import functools
 import os
 import shutil
 import sys
@@ -137,6 +138,55 @@ def is_cloud_placeholder(path: str) -> bool:
         # FILE_ATTRIBUTE_OFFLINE, RECALL_ON_DATA_ACCESS, RECALL_ON_OPEN
         return bool(attrs & (0x1000 | 0x400000 | 0x40000))
     return False
+
+
+# 윈도우 구글 드라이브(Drive for desktop '스트리밍')는 G: 같은 가상 드라이브에 붙고, 맨 위 폴더 이름이 정해져 있다
+_DRIVE_TOP = {"my drive", "내 드라이브", "shared drives", "공유 드라이브", "other computers", "다른 컴퓨터",
+              "shared with me", "공유 문서함"}
+
+
+@functools.lru_cache(maxsize=32)
+def _volume_label(drive: str) -> str:
+    """윈도우 드라이브(예: 'G:') 의 볼륨 이름. 라이브러리 훑기에서 파일마다 묻지 않게 기억해 둔다."""
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(261)
+        if ctypes.windll.kernel32.GetVolumeInformationW(drive + "\\", buf, 261, None, None, None, None, 0):
+            return buf.value
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
+def is_windows_drive_stream(path: str, platform: str = sys.platform, volume_label: str | None = None) -> bool:
+    """윈도우 구글 드라이브 가상 드라이브(G:\내 드라이브\…) 위의 파일인지.
+
+    이 드라이브의 파일은 열 때마다 인터넷에서 받아 오는데, 맥과 달리 '아직 안 받음' 표시(속성)가 없어
+    예전 앱은 일반 파일로 여겨 mpv·ffprobe·미리보기 ffmpeg(파일 전체)가 한꺼번에 읽었다.
+    볼륨 이름이 'Google Drive' 이거나, 드라이브 맨 위 폴더가 '내 드라이브/공유 드라이브' 면 그렇다고 본다.
+    """
+    if not platform.startswith("win"):
+        return False
+    import ntpath
+    drive, rest = ntpath.splitdrive(path)
+    if not drive or drive.startswith(("\\", "//")):
+        return False
+    if volume_label is None:
+        volume_label = _volume_label(drive.upper())
+    if "google drive" in volume_label.lower():
+        return True
+    parts = [x for x in rest.replace("/", "\\").split("\\") if x]
+    return len(parts) >= 2 and parts[0].lower() in _DRIVE_TOP
+
+
+def is_cloud_file(path: str) -> bool:
+    """받아 오면서 재생해야 하는 드라이브 파일인지 (맥·윈도우 '자리만 있는' 파일, 윈도우 구글 드라이브 가상 드라이브)."""
+    try:
+        if os.path.getsize(path) < (8 << 20):
+            return False
+    except OSError:
+        return False
+    return is_cloud_placeholder(path) or is_windows_drive_stream(path)
 
 
 def enable_po_token_plugin() -> str | None:
