@@ -294,6 +294,14 @@ class MpvWidget(QOpenGLWidget):
 
     # ------------------------------------------------------------------ mpv 콜백
     def _on_log(self, level: str, component: str, message: str) -> None:
+        if component == "libmpv_render" and "Suspected software renderer" in message and self.display_sync \
+                and not self.sync_fallback:
+            # mpv 가 스스로 알아챈 '그래픽 카드 없이 그리는 화면' (렌더 컨텍스트를 만들 때, 파일을 열기 전)
+            self.sync_fallback = "그래픽 카드 없이 그리는 화면"
+            try:
+                self.mpv["video-sync"] = "audio"
+            except Exception:  # noqa: BLE001
+                pass
         if component == "vd" and "Using hardware decoding (" in message:
             self.hwdec_changed.emit(message.split("(", 1)[1].split(")", 1)[0])
             return
@@ -773,9 +781,7 @@ class MpvWidget(QOpenGLWidget):
         except Exception:  # noqa: BLE001
             self._max_tex = 4096
         try:
-            rnd = GL.glGetString(GL.GL_RENDERER) or b""
-            ver = GL.glGetString(GL.GL_VERSION) or b""
-            self.gl_renderer = f"{rnd.decode(errors='replace')} (OpenGL {ver.decode(errors='replace')})"
+            self.gl_renderer = self._read_gl_renderer()
             if self.display_sync and is_software_gl(self.gl_renderer):
                 # 그래픽 카드 없이 그리면 화면 교체가 느려 박자 맞춤이 재생을 끌고 간다 → 처음부터 쓰지 않음
                 self.fall_back_sync("그래픽 카드 없이 그리는 화면")
@@ -796,6 +802,25 @@ class MpvWidget(QOpenGLWidget):
             # 렌더 컨텍스트가 생긴 다음 이벤트에서 재생 (initializeGL 안에서 바로 열지 않는다)
             from PySide6.QtCore import QTimer
             QTimer.singleShot(0, lambda: (self._play if kind == "play" else self._play_stream)(*args, **kw))
+
+    def _read_gl_renderer(self) -> str:
+        """그래픽 카드 이름 (OpenGL 판). 윈도우 CI 처럼 PyOpenGL 이 함수를 못 찾는 환경이 있어 Qt 로 먼저 읽는다."""
+        def txt(v) -> str:
+            if v is None:
+                return ""
+            return v.decode(errors="replace") if isinstance(v, (bytes, bytearray)) else str(v)
+        rnd = ver = ""
+        try:
+            f = self.context().functions()
+            rnd, ver = txt(f.glGetString(GL.GL_RENDERER)), txt(f.glGetString(GL.GL_VERSION))
+        except Exception:  # noqa: BLE001
+            pass
+        if not rnd:
+            try:
+                rnd, ver = txt(GL.glGetString(GL.GL_RENDERER)), txt(GL.glGetString(GL.GL_VERSION))
+            except Exception:  # noqa: BLE001
+                pass
+        return f"{rnd} (OpenGL {ver})" if rnd else ""
 
     def _compile(self, kind: int, src: str) -> int:
         sh = GL.glCreateShader(kind)
