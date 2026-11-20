@@ -993,6 +993,7 @@ class MainWindow(QMainWindow):
             stream_max_height=self.settings.stream_max_height,
             vr_hq=self.settings.vr_hq, vr_max_magnification=self.settings.vr_max_magnification,
             hwdec_mode=self.settings.hwdec_mode, display_sync=self.settings.display_sync,
+            sync_bad_renderer=str(self.settings.q.value("play/display_sync_bad", "") or ""),
         )
         self.player.set_volume(self.settings.volume)
         if self.settings.audio_device and self.settings.audio_device != "auto":
@@ -2768,8 +2769,8 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(4000, lambda: p == self._current and not self._cloud_job and self._probe_local(p))
         self._update_info()
         QTimer.singleShot(600, self._show_hud_info)
-        if self.player.display_sync:
-            QTimer.singleShot(6000, lambda p=self._current: self._check_display_sync(p))
+        if self.player.display_sync and not self.player.sync_fallback and not self._sync_known_bad():
+            self._start_sync_watch()
         tracks = self.player.property("track-list", []) or []
         real_video = any(t.get("type") == "video" and not t.get("albumart") and not t.get("image") for t in tracks)
         if not real_video and any(t.get("type") == "audio" for t in tracks):
@@ -2869,16 +2870,54 @@ class MainWindow(QMainWindow):
 
     def _set_display_sync(self, on: bool) -> None:
         self.settings.display_sync = on
+        self.settings.q.remove("play/display_sync_bad")
         self.player.set_display_sync(on)
         self.notify("화면 박자 맞춤을 켰습니다 (모니터 주사율에 맞춰 내보냄)" if on else "화면 박자 맞춤을 껐습니다")
 
-    def _check_display_sync(self, path: str) -> None:
-        """재생 6초 뒤: 이 PC 에서 화면 박자 맞춤이 제대로 안 되면 저절로 끈다 (상태줄에만 알림)."""
-        if path != self._current or self._music_on or bool(self.player.property("pause", True)):
+    def _sync_known_bad(self) -> bool:
+        bad = str(self.settings.q.value("play/display_sync_bad", "") or "")
+        P = self.player
+        if bad and P.gl_renderer and bad == P.gl_renderer and P.display_sync and not P.sync_fallback:
+            P.fall_back_sync("이 컴퓨터에서 전에 맞지 않았음")
+            return True
+        return False
+
+    def _start_sync_watch(self) -> None:
+        """화면 박자 맞춤 감시: 재생 1.5초째부터 1초마다 실제 재생 속도·화면 교체를 보고, 이 PC 에 안 맞으면 바로 끈다.
+
+        한 번 안 맞았던 컴퓨터(그래픽 카드 이름)는 기억해 다음 실행부터 처음부터 영상 시계 방식으로 시작한다.
+        """
+        self._sync_watch = {"path": self._current, "t0": None, "p0": 0.0, "ticks": 0}
+        if not hasattr(self, "_sync_timer"):
+            self._sync_timer = QTimer(self)
+            self._sync_timer.setInterval(500)
+            self._sync_timer.timeout.connect(self._sync_tick)
+        self._sync_timer.start()
+
+    def _sync_tick(self) -> None:
+        w = getattr(self, "_sync_watch", None)
+        P = self.player
+        if not w or w["path"] != self._current or not P.display_sync or P.sync_fallback or self._music_on:
+            self._sync_timer.stop()
             return
-        why = self.player.check_display_sync()
+        playing = not bool(P.property("pause", True)) and not bool(P.property("paused-for-cache", False))
+        pos = float(P.property("time-pos", 0.0) or 0.0)
+        if not playing:
+            w["t0"] = None                               # 멈춘 동안은 세지 않고 다시 시작
+            return
+        if w["t0"] is None:
+            w["t0"], w["p0"] = time.monotonic(), pos
+            return
+        wall = time.monotonic() - w["t0"]
+        media = pos - w["p0"]
+        speed = float(P.property("speed", 1.0) or 1.0)
+        why = P.check_display_sync(media / max(0.1, speed), wall)
         if why:
+            self._sync_timer.stop()
+            self.settings.q.setValue("play/display_sync_bad", P.gl_renderer)   # 이 그래픽 카드는 다음부터 처음부터 끔
             self.statusBar().showMessage(f"화면 박자 맞춤을 이 컴퓨터에서는 쓰지 않습니다 ({why})", 8000)
+        elif wall >= 8.0:
+            self._sync_timer.stop()                       # 8초 동안 문제없으면 이 영상은 감시 끝
 
     def _set_hwdec_mode(self, mode: str) -> None:
         self.settings.hwdec_mode = mode
@@ -3930,7 +3969,7 @@ def _run_selftest(app: QApplication, win: "MainWindow", target: str) -> None:
         # 드라이브 방식(cpcloud://, 앱 조각 받기)으로도 같은 파일이 열리는지 — 윈도우 libmpv 의 스트림 콜백 확인
         info["sync"] = {"video-sync": p.property("video-sync"), "display-fps": p.property("display-fps"),
                         "estimated": p.property("estimated-display-fps"), "jitter": p.property("vsync-jitter"),
-                        "fallback": p.sync_fallback, "on": p.display_sync}
+                        "fallback": p.sync_fallback, "on": p.display_sync, "gl": p.gl_renderer}
         info["current"] = win._current
         info["side_collapsed"] = not any(d.isVisible() for d in win._left_docks.values())
         src = win._current if target == "argv" else target

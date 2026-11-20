@@ -89,6 +89,21 @@ def display_sync_default(platform: str = sys.platform) -> bool:
     return platform.startswith("win")
 
 
+_SOFTWARE_GL = ("llvmpipe", "softpipe", "swiftshader", "gdi generic", "basic render", "swrast", "lavapipe", "software")
+
+
+def is_software_gl(renderer: str) -> bool:
+    """그래픽 카드 없이 CPU 로 화면을 그리는 환경인지 (드라이버 없는 PC, 원격 데스크톱, 가상 머신, CI)."""
+    r = (renderer or "").lower()
+    return any(k in r for k in _SOFTWARE_GL)
+
+
+def playback_too_slow(media_secs: float, wall_secs: float) -> bool:
+    """재생 시간이 실제 흐른 시간보다 눈에 띄게 늦게 가는지 (박자 맞춤이 그리기 속도에 끌려가는 경우).
+    2026-11-20 윈도우 CI(소프트웨어 렌더러, 초당 약 12장 그림): 박자 맞춤을 켜니 6초 동안 1.1초만 재생됐다."""
+    return wall_secs >= 1.5 and media_secs < 0.85 * wall_secs
+
+
 def sync_trouble(display_fps: float | None, estimated_fps: float | None, jitter: float | None) -> str:
     """화면 박자 맞춤이 이 PC 에서 제대로 안 되는지 (되면 ""). 화면 교체가 모니터 박자에 묶여 있지 않으면
     mpv 의 추정 주사율이 실제와 다르거나 흔들림이 커서, 박자 맞춤이 오히려 끊김을 만든다."""
@@ -153,7 +168,7 @@ class MpvWidget(QOpenGLWidget):
 
     def __init__(self, parent=None, *, ytdl_path: str | None = None, js_runtime: str | None = None,
                  stream_max_height: int = 2160, vr_hq: bool = True, vr_max_magnification: float = 3.0,
-                 hwdec_mode: str = "auto", display_sync: bool | None = None):
+                 hwdec_mode: str = "auto", display_sync: bool | None = None, sync_bad_renderer: str = ""):
         super().__init__(parent)
         fmt = QSurfaceFormat()
         fmt.setVersion(3, 3)
@@ -168,6 +183,7 @@ class MpvWidget(QOpenGLWidget):
             display_sync = display_sync_default()
         self.display_sync = bool(display_sync)
         self.sync_fallback = ""            # 박자 맞춤을 저절로 끈 까닭 (환경 정보에 표시)
+        self.sync_bad_renderer = sync_bad_renderer   # 전에 박자 맞춤이 안 맞았던 그래픽 카드 (설정에 기억)
         opts: dict[str, Any] = {
             "vo": "libmpv",
             "hwdec": hwdec_value(hwdec_mode),
@@ -344,20 +360,29 @@ class MpvWidget(QOpenGLWidget):
         if on:
             self.update_display_fps()
 
-    def check_display_sync(self) -> str:
-        """재생 몇 초 뒤 부른다: 이 PC 에서 박자 맞춤이 제대로 안 되면 영상 시계 방식으로 돌아가고 까닭을 돌려준다."""
+    def check_display_sync(self, media_secs: float = 0.0, wall_secs: float = 0.0) -> str:
+        """재생 중 1초마다 부른다: 이 PC 에서 박자 맞춤이 제대로 안 되면 영상 시계 방식으로 돌아가고 까닭을 돌려준다.
+
+        media_secs/wall_secs: 감시를 시작한 뒤 재생된 시간 / 실제로 흐른 시간 (재생이 끌려가는지 보기).
+        """
         if not self.display_sync or self.sync_fallback:
             return ""
-        why = sync_trouble(self.property("display-fps"), self.property("estimated-display-fps"),
-                           self.property("vsync-jitter"))
+        why = "재생이 화면 그리기 속도에 끌려 느려짐" if playback_too_slow(media_secs, wall_secs) else ""
+        if not why and wall_secs >= 2.0:
+            why = sync_trouble(self.property("display-fps"), self.property("estimated-display-fps"),
+                               self.property("vsync-jitter"))
         if why:
-            self.sync_fallback = why
-            try:
-                self.mpv["video-sync"] = "audio"
-            except Exception:  # noqa: BLE001
-                pass
-            self.log_message.emit("warn", "sync", f"화면 박자 맞춤을 끔: {why}")
+            self.fall_back_sync(why)
         return why
+
+    def fall_back_sync(self, why: str) -> None:
+        """이번 실행 동안 영상 시계(audio) 방식으로."""
+        self.sync_fallback = why
+        try:
+            self.mpv["video-sync"] = "audio"
+        except Exception:  # noqa: BLE001
+            pass
+        self.log_message.emit("warn", "sync", f"화면 박자 맞춤을 끔: {why}")
 
     def _watch_screen(self) -> None:
         win = self.window().windowHandle() if self.window() else None
@@ -751,6 +776,12 @@ class MpvWidget(QOpenGLWidget):
             rnd = GL.glGetString(GL.GL_RENDERER) or b""
             ver = GL.glGetString(GL.GL_VERSION) or b""
             self.gl_renderer = f"{rnd.decode(errors='replace')} (OpenGL {ver.decode(errors='replace')})"
+            if self.display_sync and is_software_gl(self.gl_renderer):
+                # 그래픽 카드 없이 그리면 화면 교체가 느려 박자 맞춤이 재생을 끌고 간다 → 처음부터 쓰지 않음
+                self.fall_back_sync("그래픽 카드 없이 그리는 화면")
+            elif self.display_sync and self.sync_bad_renderer and self.gl_renderer == self.sync_bad_renderer:
+                # 재생 중에 바꾸면 시작이 늦거나 소리·영상이 잠깐 어긋나서, 파일을 열기 전(화면 준비 때) 미리 끈다
+                self.fall_back_sync("이 컴퓨터에서 전에 맞지 않았음")
         except Exception:  # noqa: BLE001
             self.gl_renderer = ""
         try:

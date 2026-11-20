@@ -413,3 +413,16 @@ def test_display_sync_rules():
     assert "Hz" in sync_trouble(120.0, 109.5, 0.4)                       # 맥 실측 (교체가 박자에 안 묶임)
     assert "흔들림" in sync_trouble(60.0, 59.9, 0.6)
     assert sync_trouble(None, None, None) == ""                          # 아직 모름 → 그대로
+
+
+def test_display_sync_slow_screen_guard():
+    """그래픽 카드 없이 그리는 화면은 박자 맞춤을 처음부터 끄고, 재생이 끌려가면 1.5초 만에 끈다."""
+    from classplayer.player.mpv_widget import is_software_gl, playback_too_slow
+    assert is_software_gl("llvmpipe (LLVM 15.0.7, 256 bits) (OpenGL 4.5 (Core Profile) Mesa 23.1)")
+    assert is_software_gl("GDI Generic (OpenGL 1.1.0)")
+    assert is_software_gl("Microsoft Basic Render Driver")
+    assert not is_software_gl("Intel(R) UHD Graphics 620 (OpenGL 4.6.0 - Build 31.0.101.2111)")
+    assert not is_software_gl("Apple M4 Pro (OpenGL 4.1 Metal - 91.7)")
+    assert playback_too_slow(0.3, 1.6)            # 윈도우 CI 실측: 6초에 1.1초 재생
+    assert not playback_too_slow(1.55, 1.6)       # 정상
+    assert not playback_too_slow(0.2, 1.0)        # 1.5초 전엔 판단하지 않음

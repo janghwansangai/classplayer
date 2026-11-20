@@ -282,9 +282,10 @@ def short_path(path: str) -> str:
 class _ElideLabel(QLabel):
     """폭에 맞춰 가운데를 … 로 줄이는 한 줄 글 (긴 경로용)."""
 
-    def __init__(self, text: str = "", parent=None) -> None:
+    def __init__(self, text: str = "", parent=None, mode=Qt.TextElideMode.ElideMiddle) -> None:
         super().__init__(parent)
         self._full = text
+        self._mode = mode
         self.setMinimumWidth(10)
         self.setText(text)
 
@@ -297,7 +298,10 @@ class _ElideLabel(QLabel):
         self._update()
 
     def _update(self) -> None:
-        super().setText(self.fontMetrics().elidedText(self._full, Qt.TextElideMode.ElideMiddle, max(10, self.width())))
+        shown = self.fontMetrics().elidedText(self._full, self._mode, max(10, self.width()))
+        super().setText(shown)
+        # 줄여 보일 때는 마우스를 올리면 전체 글 (긴 폴더 이름·경로)
+        self.setToolTip(self._full if shown != self._full else "")
 
 
 class _FolderRow(QFrame):
@@ -318,7 +322,7 @@ class _FolderRow(QFrame):
         ico.setFixedSize(26, 26)
         ico.setAlignment(Qt.AlignmentFlag.AlignCenter)
         ico.setPixmap(icons.pixmap(icon, "#fbbf24" if save else "#d9dbe3", 15))
-        name = QLabel(title)
+        name = _ElideLabel(title, mode=Qt.TextElideMode.ElideRight)   # 긴 폴더 이름이 줄 폭을 밀어내지 않게
         name.setStyleSheet("font-weight:600; font-size:13px;")
         path = _ElideLabel(sub)
         path.setStyleSheet("color:#8b8e99; font-size:11px;")
@@ -416,6 +420,8 @@ class LibraryPanel(QWidget):
         self.list.setIconSize(QSize(THUMB_W, THUMB_H))
         self.list.setSpacing(1)
         self.list.setUniformItemSizes(False)     # 폴더 제목 줄은 높이가 다르다
+        # 긴 제목·폴더 이름은 줄을 바꿔 보여 준다: 제목 최대 2줄 + 폴더·크기 최대 2줄 (NowPlayingDelegate),
+        # 전체 경로는 마우스를 올리면
         self.list.setItemDelegate(NowPlayingDelegate(self.list))
         self.list.itemClicked.connect(self._on_clicked)
         self.list.itemActivated.connect(self._on_activated)

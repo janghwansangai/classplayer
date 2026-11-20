@@ -1,7 +1,7 @@
 """하단 컨트롤바: 재생/정지, 탐색 슬라이더, 시간, 볼륨, 속도, 자막, 캡처, 녹화, 360도, 소리만, 전체화면."""
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QPoint, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QSlider, QStyle, QStyleOptionSlider, QToolButton,
                                QVBoxLayout,
@@ -263,11 +263,21 @@ class ControlBar(QWidget):
         self.btn_vr.toggled.connect(self.vr_toggled)
         self.btn_vr_reset = tool("reset", "시점 초기화 (R)")
         self.btn_vr_reset.clicked.connect(self.vr_reset_clicked)
-        self.btn_vr_reset.setVisible(False)
         self.btn_audio = tool("audio", "소리만 재생 (Ctrl+B)", checkable=True)
         self.btn_audio.toggled.connect(self.audio_only_toggled)
         self.btn_full = tool("full", "전체화면 (F, 더블클릭)")
         self.btn_full.clicked.connect(self.fullscreen_clicked)
+        # 창(영상 쪽)이 좁으면 덜 쓰는 버튼부터 '⋯' 메뉴로 옮긴다 (2026-11-20: 버튼 줄이 830px 을 고집해
+        # 옆 창(라이브러리)을 넓힐 수 없었다 → 긴 폴더 이름이 잘림). 앞쪽부터 먼저 숨긴다.
+        self.btn_more = tool("more", "더 보기 — 창이 좁아 숨긴 버튼 (360도·녹화·캡처·자막 등)")
+        self.btn_more.clicked.connect(self._show_more_menu)
+        self.btn_more.hide()
+        self._overflow = [self.btn_vr_reset, self.btn_vr, self.btn_rec, self.btn_shot, self.btn_subs,
+                          self.btn_repeat, self.btn_audio, self.speed]
+        self._want = {w: True for w in self._overflow}
+        self._want[self.btn_vr_reset] = False      # 360도 모드일 때만
+        self._hidden_more: list = []
+        self._relaying = False
 
         # 두 줄: 위는 화면 폭 전체의 탐색 막대, 아래는 버튼 (버튼이 늘어도 탐색 막대가 짧아지지 않게, 2026-11-17)
         outer = QVBoxLayout(self)
@@ -291,8 +301,82 @@ class ControlBar(QWidget):
         lay.addSpacing(6)
         lay.addWidget(self.speed)
         for w in (self.btn_repeat, self.btn_subs, self.btn_shot, self.btn_rec, self.btn_vr, self.btn_vr_reset, self.btn_audio,
-                  self.btn_full):
+                  self.btn_more, self.btn_full):
             lay.addWidget(w)
+        self._row = lay
+        self._fixed = [self.btn_prev, self.btn_back, self.btn_play, self.btn_fwd, self.btn_next, self.lbl_time,
+                       self.btn_mute, self.vol, self.btn_full]
+        self._relayout()
+
+    # ------------------------------------------------------------------ 좁을 때 버튼 접기
+    def _fixed_width(self) -> int:
+        m = self.layout().contentsMargins()
+        sp = self._row.spacing()
+        ws = [w for w in self._fixed if not w.isHidden() or w in (self.btn_prev, self.btn_next)]
+        return m.left() + m.right() + sum(w.sizeHint().width() for w in ws) + sp * len(ws) + 8 + 6 + 12
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        # 꼭 필요한 버튼 + '⋯' 만큼만 요구한다 (나머지는 좁으면 메뉴로) → 옆 창을 넓게 끌 수 있다
+        base = super().minimumSizeHint()
+        return QSize(self._fixed_width() + self.btn_more.sizeHint().width() + self._row.spacing(), base.height())
+
+    def resizeEvent(self, e) -> None:  # noqa: N802
+        super().resizeEvent(e)
+        self._relayout()
+
+    def _set_want(self, w, on: bool) -> None:
+        self._want[w] = bool(on)
+        self._relayout()
+
+    def _relayout(self) -> None:
+        if self._relaying or not hasattr(self, "_fixed"):
+            return
+        self._relaying = True
+        try:
+            sp = self._row.spacing()
+            avail = self.width()
+            total = self._fixed_width()
+            wanted = [w for w in self._overflow if self._want.get(w)]
+            keep: list = []
+            more_w = self.btn_more.sizeHint().width() + sp
+            for i, w in enumerate(reversed(wanted)):        # 뒤쪽(배속·소리만…)이 더 중요 → 먼저 자리 잡기
+                ww = w.sizeHint().width() + sp
+                left = len(wanted) - i - 1                   # 이걸 넣고도 남는(숨길) 것 수
+                if total + ww + (more_w if left else 0) <= avail:
+                    keep.append(w)
+                    total += ww
+                else:
+                    break
+            hidden = [w for w in wanted if w not in keep]
+            for w in self._overflow:
+                vis = w in keep
+                if w.isHidden() == vis:
+                    w.setVisible(vis)
+            if self.btn_more.isHidden() == bool(hidden):
+                self.btn_more.setVisible(bool(hidden))
+            self._hidden_more = hidden
+        finally:
+            self._relaying = False
+
+    def _show_more_menu(self) -> None:
+        from PySide6.QtWidgets import QMenu
+        menu = QMenu(self)
+        for w in self._hidden_more:
+            if w is self.speed:
+                sub = menu.addMenu("재생 속도")
+                for i in range(self.speed.count()):
+                    a = sub.addAction(self.speed.itemText(i))
+                    a.setCheckable(True)
+                    a.setChecked(i == self.speed.currentIndex())
+                    a.triggered.connect(lambda _c=False, k=i: self.speed.setCurrentIndex(k))
+                continue
+            text = (w.toolTip() or "").split(" — ")[0]
+            a = menu.addAction(w.icon(), text)
+            a.setCheckable(w.isCheckable())
+            a.setChecked(w.isChecked())
+            a.setEnabled(w.isEnabled())
+            a.triggered.connect(lambda _c=False, b=w: b.click())
+        menu.exec(self.btn_more.mapToGlobal(self.btn_more.rect().topLeft()) - QPoint(0, menu.sizeHint().height()))
 
     # ------------------------------------------------------------------
     relative_seek = Signal(float)
@@ -392,7 +476,7 @@ class ControlBar(QWidget):
             b.setEnabled(on)
             b.setToolTip(tip if on else tip.split(" (")[0] + " — 음악·소리만 재생 중에는 쓸 수 없습니다")
         if not on:
-            self.btn_vr_reset.setVisible(False)
+            self._set_want(self.btn_vr_reset, False)
 
     def set_audio_only(self, on: bool) -> None:
         self.btn_audio.blockSignals(True)
@@ -422,7 +506,7 @@ class ControlBar(QWidget):
         self.btn_vr.blockSignals(True)
         self.btn_vr.setChecked(on)
         self.btn_vr.blockSignals(False)
-        self.btn_vr_reset.setVisible(on)
+        self._set_want(self.btn_vr_reset, on)
 
     def set_speed(self, s: float) -> None:
         for i in range(self.speed.count()):
